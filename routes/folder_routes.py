@@ -99,6 +99,43 @@ def setup_folder_routes(memory_manager: MemoryManager):
             "receive": policy.receive, "share": policy.share,
             "created_at": policy.created_at, "snapshot_at": policy.snapshot_at}}
 
+    @router.post("/{name}/rename")
+    def rename_folder(request: Request, name: str, body: dict):
+        """Rename a project: its chats, its memory settings and its private memories."""
+        user = effective_user(request)
+        old, new = name.strip(), str(body.get("new_name") or "").strip()
+        if not old or not new:
+            raise HTTPException(400, "Both the current and the new project name are required")
+        if old == new:
+            return {"name": new, "chats": 0, "memories": 0}
+        db = SessionLocal()
+        try:
+            query = db.query(DbSession).filter(DbSession.folder == old)
+            if user:
+                query = query.filter(DbSession.owner == user)
+            rows = query.all()
+            for row in rows:
+                row.folder = new
+            db.commit()
+            moved_chats = len(rows)
+        finally:
+            db.close()
+        folder_memory.rename_policy(user, old, new)
+        moved_memories = 0
+        try:
+            entries = memory_manager.load_all_for_update()
+        except MemoryStoreUnreadable as error:
+            logger.error("Memory store unreadable; project %s renamed without its memories: %s", old, error)
+            entries = None
+        if entries is not None:
+            for entry in entries:
+                if (not user or entry.get("owner") == user) and str(entry.get("folder") or "").strip() == old:
+                    entry["folder"] = new
+                    moved_memories += 1
+            if moved_memories:
+                memory_manager.save(entries)
+        return {"name": new, "chats": moved_chats, "memories": moved_memories}
+
     @router.get("/move-impact")
     def move_impact(request: Request, session_id: str, to: str = ""):
         """How many of a chat's memories a move would change; 0 means don't ask."""

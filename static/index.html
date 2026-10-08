@@ -817,9 +817,9 @@
             <div id="session-sort-dropdown" class="dropdown sort-dropdown" style="display:none;">
               <div class="dropdown-item sort-option sort-dropdown-item" data-sort="active">Last Active</div>
               <div class="dropdown-item sort-option sort-dropdown-item" data-sort="newest">Newest First</div>
-              <div class="dropdown-item sort-option sort-dropdown-item" data-sort="group">By Folder</div>
+              <div class="dropdown-item sort-option sort-dropdown-item" data-sort="group">By Project</div>
               <div class="dropdown-item sort-dropdown-item sort-dropdown-sep ai-sort-option" id="auto-sort-sessions-row" style="display:flex;align-items:center;padding:0;">
-                <span id="auto-sort-sessions-btn" title="Use AI to organize chats into folders" style="flex:1;padding:5px 10px 5px 4px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+                <span id="auto-sort-sessions-btn" title="Use AI to organize chats into projects" style="flex:1;padding:5px 10px 5px 4px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
                   <span class="auto-sort-icon"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 0L14.59 8.41L23 12L14.59 15.59L12 24L9.41 15.59L1 12L9.41 8.41Z"/></svg></span>
                   <span>AI sort</span>
                   <span class="auto-sort-spinner" style="display:none;">Sorting...</span>
@@ -852,6 +852,15 @@
           <div id="session-list-loading" class="list-item session-list-bootstrap" role="option" aria-disabled="true" aria-live="polite" aria-atomic="true">
             <span class="grow muted" data-session-list-status>Loading chats…</span>
           </div>
+        </div>
+      </div>
+      <div class="section" id="projects-section">
+        <div class="section-header-flex">
+          <span class="section-title" id="projects-section-title" style="cursor:pointer;" title="Manage projects"><svg class="section-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg><span>Projects</span></span>
+          <button type="button" class="section-header-btn list-item-plus-btn" id="projects-new-btn" title="New project">
+            <svg class="list-item-plus-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span class="list-item-plus-label">new</span>
+          </button>
         </div>
       </div>
       <div class="section" id="email-section">

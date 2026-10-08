@@ -68,6 +68,7 @@ const PRECACHE = [
   '/static/js/dragSort.js',
   '/static/js/sessions.js',
   '/static/js/memory.js',
+  '/static/js/projects.js',
   '/static/js/skills.js?v=20260909kebabconsistency1',
   '/static/js/skillsMetrics.js?v=20260908autonomousskills1',
   '/static/js/tourHints.js',

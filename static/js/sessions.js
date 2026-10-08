@@ -10,6 +10,7 @@ import themeModule from './theme.js?v=20260911organsrain1';
 import spinnerModule from './spinner.js';
 import { actionMenuRank, orderActionMenuItems, SELECT_MENU_ICON } from './actionMenuOrder.js';
 import { registerEscapeLayer, bindMenuDismiss } from './escMenuStack.js';
+import projectsModule from './projects.js';
 
 const API_BASE = window.location.origin;
 
@@ -424,22 +425,28 @@ function saveFolderOrder(order) {
   Storage.setJSON(FOLDER_ORDER_KEY, order);
 }
 
-/** Get all unique folder names from current sessions. */
+/** Project (folder) names from current sessions, plus projects with no chats yet. */
 function getFolderNames() {
-  const names = new Set();
+  const names = new Set(projectsModule.knownProjectNames());
   sessions.forEach(s => { if (s.folder) names.add(s.folder); });
   return Array.from(names).sort();
 }
 
 /** Move a session to a folder via the API. */
 async function moveToFolder(sessionId, folderName) {
+  // When the move changes who can see this chat's memories, ask whether they
+  // go with it. null = the user cancelled the move.
+  const memoryMove = await projectsModule.chooseMemoryMove(sessionId, folderName || '');
+  if (memoryMove === null) return false;
   const fd = new FormData();
   fd.append('folder', folderName || '');
+  if (memoryMove) fd.append('memory_move', memoryMove);
   await fetch(`${API_BASE}/api/session/${encodeURIComponent(sessionId)}`, { method: 'PATCH', body: fd });
   // Update local data
   const s = sessions.find(x => x.id === sessionId);
   if (s) s.folder = folderName || null;
   renderSessionList();
+  return true;
 }
 
 // Let a chat be dropped directly on a folder/tag. The existing menu action is
@@ -463,8 +470,8 @@ function wireFolderDropTarget(header, folderName) {
     if (!sessionId) return;
     const session = sessions.find(s => String(s.id) === String(sessionId));
     if (!session || (session.folder || '') === (folderName || '')) return;
-    await moveToFolder(sessionId, folderName);
-    uiModule.showToast(folderName ? `Moved to ${folderName}` : 'Removed from folder');
+    if (!(await moveToFolder(sessionId, folderName))) return;
+    uiModule.showToast(folderName ? `Moved to ${folderName}` : 'Removed from project');
   });
 }
 
@@ -476,7 +483,7 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
   moveItem.className = 'dropdown-item-compact';
   moveItem.style.position = 'relative';
   const _folderIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
-  moveItem.innerHTML = '<span class="dropdown-icon">' + _folderIcon + '</span><span>Move to folder</span>';
+  moveItem.innerHTML = '<span class="dropdown-icon">' + _folderIcon + '</span><span>Move to project</span>';
 
   const sub = document.createElement('div');
   sub.className = 'dropdown session-folder-submenu';
@@ -485,7 +492,7 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
   const noneOpt = document.createElement('div');
   noneOpt.className = 'dropdown-item-compact';
   if (!currentFolder) noneOpt.style.opacity = '0.5';
-  noneOpt.textContent = '(No folder)';
+  noneOpt.textContent = '(No project)';
   noneOpt.addEventListener('click', async (e) => {
     e.stopPropagation();
     await moveToFolder(sessionId, '');
@@ -516,16 +523,12 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
   const newOpt = document.createElement('div');
   newOpt.className = 'dropdown-item-compact';
   newOpt.style.color = 'var(--accent-primary)';
-  newOpt.textContent = '+ New Folder';
+  newOpt.textContent = '+ New Project';
   newOpt.addEventListener('click', async (e) => {
     e.stopPropagation();
-    const name = await styledPrompt('Name this folder:', {
-      title: 'New folder',
-      placeholder: 'e.g. Work, Research, Drafts',
-      confirmText: 'Create',
-    });
-    if (!name || !name.trim()) return;
-    await moveToFolder(sessionId, name.trim());
+    const name = await projectsModule.createProject();
+    if (!name) return;
+    await moveToFolder(sessionId, name);
     // Auto-flip to By Folder view so the user immediately sees the
     // folder they just created — otherwise the new folder disappears
     // into the flat list and looks like the action did nothing.
@@ -1425,7 +1428,7 @@ function _renderSessionListImpl() {
     const dragHandle = document.createElement('span');
     dragHandle.className = 'folder-drag-handle';
     dragHandle.textContent = '\u2630';
-    dragHandle.title = 'Drag to reorder folder';
+    dragHandle.title = 'Drag to reorder project';
     header.appendChild(dragHandle);
 
     const toggle = document.createElement('span');
@@ -1447,11 +1450,11 @@ function _renderSessionListImpl() {
     const deleteBtn = document.createElement('button');
     deleteBtn.className = 'folder-delete-btn';
     deleteBtn.textContent = '\u00d7';
-    deleteBtn.title = 'Delete folder and all sessions';
+    deleteBtn.title = 'Delete project and all its chats';
     deleteBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const count = folders[folderName].length;
-      if (!await _confirmSessionDeletion(folders[folderName].map(s => s.id), `Delete folder "${folderName}" and all ${count} chats inside it?`)) return;
+      if (!await _confirmSessionDeletion(folders[folderName].map(s => s.id), `Delete project "${folderName}" and all ${count} chats inside it? Its private memories are kept.`)) return;
       for (const s of folders[folderName]) {
         try {
           await fetch(_sessionDeletionUrl(s.id), { method: 'DELETE' });
@@ -1483,14 +1486,22 @@ function _renderSessionListImpl() {
     header.addEventListener('dblclick', async (e) => {
       e.stopPropagation();
       if (e.target.closest('.folder-delete-btn')) return;
-      const newName = await styledPrompt('Rename folder:', {
-        title: 'Rename folder',
+      const newName = await styledPrompt('Rename project:', {
+        title: 'Rename project',
         defaultValue: folderName,
         confirmText: 'Rename',
       });
       if (!newName || !newName.trim() || newName.trim() === folderName) return;
-      const promises = folders[folderName].map(s => moveToFolder(s.id, newName.trim()));
-      Promise.all(promises).then(() => loadSessions());
+      // One server call renames the chats, the project's memory settings and
+      // its private memories together (moving each chat would ask about
+      // memories once per chat).
+      await fetch(`${API_BASE}/api/folders/${encodeURIComponent(folderName)}/rename`, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ new_name: newName.trim() }),
+      });
+      await projectsModule.refreshProjects();
+      await loadSessions();
     });
 
     folderDiv.appendChild(header);
@@ -1541,7 +1552,7 @@ function _renderSessionListImpl() {
     const dragHandle = document.createElement('span');
     dragHandle.className = 'folder-drag-handle';
     dragHandle.textContent = '\u2630';
-    dragHandle.title = 'Drag to reorder folder';
+    dragHandle.title = 'Drag to reorder project';
     unsortedHeader.appendChild(dragHandle);
 
     const toggle = document.createElement('span');
