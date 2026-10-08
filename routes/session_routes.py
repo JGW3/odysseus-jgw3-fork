@@ -376,6 +376,7 @@ def setup_session_routes(
     webhook_manager=None,
     upload_handler=None,
     skills_manager=None,
+    memory_manager=None,
 ):
     """Setup session routes with the provided manager and config"""
 
@@ -661,6 +662,7 @@ def setup_session_routes(
     def rename_session(
         request: Request, sid: str,
         name: str = Form(None), folder: str = Form(None),
+        memory_move: str = Form(None),
         model: str = Form(None), endpoint_url: str = Form(None),
         endpoint_id: str = Form(None),
         cwd: str = Form(None),
@@ -686,6 +688,12 @@ def setup_session_routes(
                     result["folder"] = folder if folder else None
             finally:
                 db.close()
+            # The user chose whether this chat's memories follow it into the
+            # new project ("move") or stay where they are ("keep").
+            if memory_move and memory_manager is not None:
+                from routes.folder_routes import apply_memory_move
+                result["memories_moved"] = apply_memory_move(
+                    memory_manager, effective_user(request), sid, folder or None, memory_move)
         if cwd is not None:
             clean_cwd = cwd.strip() or None
             db = SessionLocal()

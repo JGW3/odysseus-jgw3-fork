@@ -154,6 +154,8 @@ class NativeMemoryProvider(MemoryProvider):
         )
         if session_id:
             entry["session_id"] = session_id
+            from src.folder_memory import tag_new_memory
+            tag_new_memory(entry, owner, session_id)
         if metadata:
             entry["metadata"] = dict(metadata)
 

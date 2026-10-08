@@ -689,6 +689,7 @@ app.include_router(setup_session_routes(
     webhook_manager=webhook_manager,
     upload_handler=upload_handler,
     skills_manager=skills_manager,
+    memory_manager=memory_manager,
 ))
 
 # Admin Danger Zone wipes (Settings → System → Danger Zone)
@@ -699,6 +700,8 @@ app.include_router(setup_admin_wipe_routes(session_manager))
 from routes.memory.memory_routes import setup_memory_routes
 memory_router = setup_memory_routes(memory_manager, session_manager, memory_vector=memory_vector)
 app.include_router(memory_router)
+from routes.folder_routes import setup_folder_routes
+app.include_router(setup_folder_routes(memory_manager))
 from routes.skills_routes import setup_skills_routes
 app.include_router(setup_skills_routes(skills_manager))
 

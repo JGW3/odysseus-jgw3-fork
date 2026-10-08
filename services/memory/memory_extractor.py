@@ -434,6 +434,16 @@ async def extract_and_store(
             logger.error("Skipping auto memory extraction, store unreadable: %s", e)
             return
         added = 0
+        # Duplicates only count within the scope the new memory will land in
+        # (the shared pool, or this chat's project if it keeps memories
+        # private); otherwise a fact private to one project would block the
+        # same fact from ever reaching the shared pool, and vice versa.
+        from src.folder_memory import folder_for_new_memory, session_folder
+        _target_scope = folder_for_new_memory(_owner, session_folder(getattr(session, "id", None)))
+
+        def _same_scope(entry):
+            return (str(entry.get("folder") or "").strip() or None) == _target_scope
+
         auto_pinned_identity_count = sum(
             1 for entry in existing
             if _is_owner_memory(entry, _owner) and _is_auto_pinned_identity(entry)
@@ -473,12 +483,13 @@ async def extract_and_store(
                     # silently dropped. Mirror the owner predicate used by the
                     # text dedup below; cross-tenant/stale matches fall through.
                     _match = next((e for e in existing if e.get("id") == existing_id), None)
-                    if _match is not None and (_match.get("owner") == _owner or _match.get("owner") is None):
+                    if _match is not None and (_match.get("owner") == _owner or _match.get("owner") is None) and _same_scope(_match):
                         logger.debug(f"Memory dedup (vector): '{fact_text[:50]}' matches {existing_id}")
                         continue
 
             # Text dedup fallback: exact match + fuzzy similarity
             user_existing = [e for e in existing if e.get("owner") == _owner or e.get("owner") is None] if _owner else existing
+            user_existing = [e for e in user_existing if _same_scope(e)]
             if memory_manager.find_duplicates(fact_text, user_existing):
                 continue
             # Fuzzy text similarity check (catches rephrased duplicates when vector index is unavailable)
@@ -500,6 +511,8 @@ async def extract_and_store(
                 entry["session_id"] = session.session_id
             elif hasattr(session, "name"):
                 entry["session_id"] = session.name
+            from src.folder_memory import tag_new_memory
+            tag_new_memory(entry, _owner, getattr(session, "id", None) or entry.get("session_id"))
 
             existing.append(entry)
 
@@ -668,89 +681,103 @@ async def audit_memories(
             }
 
         # Build payload: list of {id, text, category} for the LLM
-        memory_payload = [
-            {"id": m["id"], "text": m["text"], "category": m.get("category", "fact")}
-            for m in existing
-        ]
+        # Tidy each memory scope on its own: the shared pool, and each
+        # project's private memories (see src/folder_memory.py), so a
+        # merge can never move private text into a shared memory.
+        async def _audit_scope(scope_entries):
+            memory_payload = [
+                {"id": m["id"], "text": m["text"], "category": m.get("category", "fact")}
+                for m in scope_entries
+            ]
 
-        audit_messages = [
-            {"role": "system", "content": AUDIT_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(memory_payload, ensure_ascii=False)},
-        ]
+            audit_messages = [
+                {"role": "system", "content": AUDIT_SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(memory_payload, ensure_ascii=False)},
+            ]
 
-        raw = await llm_call_async(
-            endpoint_url,
-            model,
-            audit_messages,
-            temperature=0.1,
-            # 16384 (was 2000): the deduped list of all memories can be large,
-            # and a reasoning model spends tokens thinking first — 2000 truncated
-            # the JSON so it never parsed ("bad_json").
-            max_tokens=16384,
-            headers=headers,
-            # Bound the call so the Tidy whirlpool can't spin indefinitely on a
-            # slow/large generation.
-            timeout=120,
-        )
+            raw = await llm_call_async(
+                endpoint_url,
+                model,
+                audit_messages,
+                temperature=0.1,
+                # 16384 (was 2000): the deduped list of all memories can be large,
+                # and a reasoning model spends tokens thinking first — 2000 truncated
+                # the JSON so it never parsed ("bad_json").
+                max_tokens=16384,
+                headers=headers,
+                # Bound the call so the Tidy whirlpool can't spin indefinitely on a
+                # slow/large generation.
+                timeout=120,
+            )
 
-        # Parse the JSON list, tolerating reasoning-model noise: <think> blocks,
-        # markdown fences, leading prose, and trailing commas.
-        import re as _re
-        from src.text_helpers import strip_closed_think_blocks
-        text = (raw or "").strip()
-        text = strip_closed_think_blocks(text).strip()
+            # Parse the JSON list, tolerating reasoning-model noise: <think> blocks,
+            # markdown fences, leading prose, and trailing commas.
+            import re as _re
+            from src.text_helpers import strip_closed_think_blocks
+            text = (raw or "").strip()
+            text = strip_closed_think_blocks(text).strip()
 
-        def _loads_list(s):
-            if not s:
+            def _loads_list(s):
+                if not s:
+                    return None
+                for cand in (s, _re.sub(r',(\s*[}\]])', r'\1', s)):
+                    try:
+                        v = json.loads(cand)
+                        if isinstance(v, list):
+                            return v
+                    except Exception:
+                        continue
                 return None
-            for cand in (s, _re.sub(r',(\s*[}\]])', r'\1', s)):
-                try:
-                    v = json.loads(cand)
-                    if isinstance(v, list):
-                        return v
-                except Exception:
-                    continue
-            return None
 
-        cleaned = _loads_list(text)
-        if cleaned is None:
-            # Possessive `\s*+`: handing fence whitespace back to the body on a
-            # missing closing fence only rescanned the same tail (ReDoS).
-            _m = _re.search(r'```(?:json)?\s*+\n?([\s\S]*?)```', text)
-            if _m:
-                cleaned = _loads_list(_m.group(1).strip())
-        if cleaned is None:
-            _a, _b = text.find('['), text.rfind(']')
-            if _a >= 0 and _b > _a:
-                cleaned = _loads_list(text[_a:_b + 1])
-        if cleaned is None:
-            logger.error(f"Memory audit returned non-JSON: {text[:300]}")
-            return {"before": before_count, "after": before_count, "error": "bad_json"}
+            cleaned = _loads_list(text)
+            if cleaned is None:
+                # Possessive `\s*+`: handing fence whitespace back to the body on a
+                # missing closing fence only rescanned the same tail (ReDoS).
+                _m = _re.search(r'```(?:json)?\s*+\n?([\s\S]*?)```', text)
+                if _m:
+                    cleaned = _loads_list(_m.group(1).strip())
+            if cleaned is None:
+                _a, _b = text.find('['), text.rfind(']')
+                if _a >= 0 and _b > _a:
+                    cleaned = _loads_list(text[_a:_b + 1])
+            if cleaned is None:
+                logger.error(f"Memory audit returned non-JSON: {text[:300]}")
+                return None
+            return cleaned
 
-        # Build lookup of original entries by ID so we can preserve metadata
+        scopes = {}
+        for m in existing:
+            scopes.setdefault(str(m.get("folder") or "").strip(), []).append(m)
         originals = {m["id"]: m for m in existing}
-
         final_entries = []
-        for item in cleaned:
-            if not isinstance(item, dict):
+        for _scope_entries in scopes.values():
+            if len(_scope_entries) < 2:
+                final_entries.extend(_scope_entries)
                 continue
-            mid = item.get("id", "")
-            new_text = item.get("text", "").strip()
-            if not new_text:
-                continue
+            cleaned = await _audit_scope(_scope_entries)
+            if cleaned is None:
+                return {"before": before_count, "after": before_count, "error": "bad_json"}
+            scope_ids = {m["id"] for m in _scope_entries}
+            for item in cleaned:
+                if not isinstance(item, dict):
+                    continue
+                mid = item.get("id", "")
+                new_text = item.get("text", "").strip()
+                if not new_text:
+                    continue
 
-            if mid in originals:
-                # Preserve original metadata, update text + category
-                entry = originals[mid].copy()
-                entry["text"] = new_text
-                if item.get("category"):
-                    entry["category"] = item["category"]
-            else:
-                # ID not found — skip to avoid inventing entries
-                logger.debug(f"Audit returned unknown id {mid}, skipping")
-                continue
+                if mid in originals and mid in scope_ids:
+                    # Preserve original metadata, update text + category
+                    entry = originals[mid].copy()
+                    entry["text"] = new_text
+                    if item.get("category"):
+                        entry["category"] = item["category"]
+                else:
+                    # ID not found — skip to avoid inventing entries
+                    logger.debug(f"Audit returned unknown id {mid}, skipping")
+                    continue
 
-            final_entries.append(entry)
+                final_entries.append(entry)
 
         after_count = len(final_entries)
 

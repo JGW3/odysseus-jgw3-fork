@@ -405,9 +405,13 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
 
     action = lines[0].strip().lower()
 
+    # Memory scope: only memories this chat's project may see.
+    from src.folder_memory import memory_visible as _mem_visible, session_folder as _session_folder
+    _project = _session_folder(session_id)
+
     if action == "list":
         category_filter = lines[1].strip().lower() if len(lines) > 1 and lines[1].strip() else None
-        memories = _memory_manager.load(owner=owner)
+        memories = [m for m in _memory_manager.load(owner=owner) if _mem_visible(m, owner, _project)]
         if category_filter:
             memories = [m for m in memories if m.get("category", "").lower() == category_filter]
         if not memories:
@@ -432,6 +436,10 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
             return {"error": "Memory text cannot be empty"}
 
         entry = _memory_manager.add_entry(text, source="ai_agent", category=category, owner=owner)
+        if session_id:
+            entry["session_id"] = session_id
+        from src.folder_memory import tag_new_memory
+        tag_new_memory(entry, owner, session_id)
         # Strict load: this is a read-modify-write, and it is the path an
         # ordinary "remember that I prefer X" takes. Degrading to [] here would
         # save just this one entry over a store we only failed to read,
@@ -473,8 +481,8 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
         found = False
         for m in memories:
             if (m.get("id", "") == memory_id if bound is not None else m.get("id", "").startswith(memory_id)):
-                # Verify ownership
-                if owner and m.get("owner") != owner:
+                # Verify ownership and that this chat's project may see it
+                if (owner and m.get("owner") != owner) or not _mem_visible(m, owner, _project):
                     return {"error": f"Memory '{memory_id}' not found"}
                 m["text"] = new_text
                 m["timestamp"] = int(time.time())
@@ -508,8 +516,8 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
         delete_id = None
         for m in memories:
             if (m.get("id", "") == memory_id if bound is not None else m.get("id", "").startswith(memory_id)):
-                # Verify ownership
-                if owner and m.get("owner") != owner:
+                # Verify ownership and that this chat's project may see it
+                if (owner and m.get("owner") != owner) or not _mem_visible(m, owner, _project):
                     return {"error": f"Memory '{memory_id}' not found"}
                 full_id = m["id"]
                 delete_id = m["id"]
@@ -533,7 +541,7 @@ async def do_manage_memory(content: str, session_id: Optional[str] = None, owner
         if len(lines) < 2:
             return {"error": "Search needs line 2: query"}
         query = lines[1].strip()
-        memories = _memory_manager.load(owner=owner)
+        memories = [m for m in _memory_manager.load(owner=owner) if _mem_visible(m, owner, _project)]
         query_lower = query.lower()
         exact_results = [m for m in memories if query_lower in (m.get("text", "").lower())]
 

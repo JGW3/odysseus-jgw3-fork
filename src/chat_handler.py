@@ -341,6 +341,11 @@ class ChatHandler:
             mem = self.memory_manager.load()
             if not self.memory_manager.find_duplicates(memory_text, mem):
                 new_entry = self.memory_manager.add_entry(memory_text)
+                _sid = getattr(session, "id", None)
+                if _sid:
+                    new_entry["session_id"] = _sid
+                    from src.folder_memory import tag_new_memory
+                    tag_new_memory(new_entry, getattr(session, "owner", None), _sid)
                 mem.append(new_entry)
                 self.memory_manager.save(mem)
 

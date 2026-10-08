@@ -329,6 +329,10 @@ class ChatProcessor:
         self._last_used_memories = []  # track what was injected
         if use_memory and not self._is_memory_management_request(message):
             mem_entries = self.memory_manager.load(owner=owner)
+            # Only memories this chat's project may see (see src/folder_memory.py).
+            from src.folder_memory import filter_visible, session_folder
+            mem_entries = filter_visible(
+                mem_entries, owner, session_folder(getattr(session, "id", None)))
 
             pinned = [m for m in mem_entries if m.get("pinned")]
             extended = [m for m in mem_entries if not m.get("pinned")]
