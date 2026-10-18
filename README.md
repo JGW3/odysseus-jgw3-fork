@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/branding/odysseus-wordmark.png" alt="Odysseus" width="238">
+</p>
+
 > [!NOTE]
 > **About this branch.** `all-jgw3-fixes` is a demo branch on JGW3's personal fork of [Odysseus](https://github.com/odysseus-dev/odysseus). It is upstream `dev` with all of JGW3's open pull requests merged in, so the fixes can be tried together. It is not the official project and not a release. For the real thing, use [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus).
 >
@@ -19,9 +23,6 @@
 >
 > **Testing:** the pull requests' own tests plus the frontend, version-parity, gallery, vision, chat-history and document tests (781 tests, browser tests included) pass, with no failures that clean upstream `dev` doesn't also have.
 
-<p align="center">
-  <img src="assets/branding/odysseus-wordmark.png" alt="Odysseus" width="238">
-</p>
 
 <p align="center">
   A self-hosted AI workspace for chat, agents, research, documents, email, notes, calendar, and local model workflows.
