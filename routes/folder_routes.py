@@ -1,10 +1,11 @@
-"""Chat folders and their memory policies (see src/folder_memory.py)."""
+"""Projects (chat folders) and their settings: memory (src/folder_memory.py)
+and documents (src/folder_documents.py)."""
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
 
 from core.database import Session as DbSession, SessionLocal
-from src import folder_memory
+from src import folder_documents, folder_memory
 from src.auth_helpers import effective_user
 from src.memory import MemoryManager, MemoryStoreUnreadable
 
@@ -57,6 +58,48 @@ def apply_memory_move(memory_manager: MemoryManager, user, session_id, to_folder
     return changed
 
 
+def apply_document_move(user, session_id, to_folder, choice) -> int:
+    """Re-file a moved chat's documents when the user chose to move them."""
+    if str(choice or "").strip().lower() != "move":
+        return 0
+    return folder_documents.retag_session_documents(user, session_id, to_folder)
+
+
+def _private_document_counts(user):
+    from core.database import Document
+    db = SessionLocal()
+    try:
+        query = db.query(Document.folder).filter(Document.folder.isnot(None))
+        if user:
+            query = query.filter(Document.owner == user)
+        counts = {}
+        for (folder,) in query.all():
+            name = str(folder or "").strip()
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+        return counts
+    finally:
+        db.close()
+
+
+def _project_chat_ids(user, folder):
+    db = SessionLocal()
+    try:
+        query = db.query(DbSession.id).filter(DbSession.folder == folder)
+        if user:
+            query = query.filter(DbSession.owner == user)
+        return {row[0] for row in query.all()}
+    finally:
+        db.close()
+
+
+def _policy_dict(policy):
+    return {
+        "receive": policy.receive, "share": policy.share,
+        "created_at": policy.created_at, "snapshot_at": policy.snapshot_at,
+    }
+
+
 def setup_folder_routes(memory_manager: MemoryManager):
     router = APIRouter(prefix="/api/folders", tags=["folders"])
 
@@ -71,33 +114,65 @@ def setup_folder_routes(memory_manager: MemoryManager):
             tag = str(entry.get("folder") or "").strip()
             if tag:
                 private[tag] = private.get(tag, 0) + 1
+        private_docs = _private_document_counts(user)
         names = sorted(set(counts) | set(policies), key=str.casefold)
+        default = folder_memory.DEFAULT_POLICY
         return {"folders": [
             {
                 "name": name,
                 "chats": counts.get(name, 0),
                 "private_memories": private.get(name, 0),
-                "memory": {
-                    "receive": policies.get(name, folder_memory.DEFAULT_POLICY).receive,
-                    "share": policies.get(name, folder_memory.DEFAULT_POLICY).share,
-                    "created_at": policies.get(name, folder_memory.DEFAULT_POLICY).created_at,
-                    "snapshot_at": policies.get(name, folder_memory.DEFAULT_POLICY).snapshot_at,
-                },
+                "private_documents": private_docs.get(name, 0),
+                "memory": _policy_dict(policies.get(name, default)),
+                "documents_private": policies.get(name, default).documents_private,
             }
             for name in names
         ]}
 
-    @router.put("/{name}/memory")
-    def set_folder_memory(request: Request, name: str, body: dict):
+    def _save_settings(request: Request, name: str, body: dict):
         user = effective_user(request)
+        folder = name.strip()
+        before = folder_memory.get_policy(user, folder)
+        documents_private = body.get("documents_private")
         try:
             policy = folder_memory.set_policy(
-                user, name, receive=str(body.get("receive") or "all"), share=body.get("share") is not False)
+                user, folder, receive=str(body.get("receive") or "all"), share=body.get("share") is not False,
+                documents_private=None if documents_private is None else documents_private is True)
         except ValueError as error:
             raise HTTPException(400, str(error))
-        return {"name": name.strip(), "memory": {
-            "receive": policy.receive, "share": policy.share,
-            "created_at": policy.created_at, "snapshot_at": policy.snapshot_at}}
+        # Turning compartmentalization on files what the project's chats
+        # already made under it, so nothing it made stays in the shared pool.
+        tagged_memories = tagged_documents = 0
+        if before.share and not policy.share:
+            tagged_memories = _tag_project_memories(user, folder)
+        if policy.documents_private and not before.documents_private:
+            tagged_documents = folder_documents.tag_project_documents(user, folder)
+        return {"name": folder, "memory": _policy_dict(policy),
+                "documents_private": policy.documents_private,
+                "memories_filed": tagged_memories, "documents_filed": tagged_documents}
+
+    def _tag_project_memories(user, folder) -> int:
+        chat_ids = _project_chat_ids(user, folder)
+        if not chat_ids:
+            return 0
+        try:
+            entries = memory_manager.load_all_for_update()
+        except MemoryStoreUnreadable as error:
+            logger.error("Memory store unreadable; project %s memories not filed: %s", folder, error)
+            return 0
+        changed = folder_memory.tag_chat_memories(
+            [e for e in entries if not user or e.get("owner") == user], chat_ids, folder)
+        if changed:
+            memory_manager.save(entries)
+        return changed
+
+    @router.put("/{name}/settings")
+    def set_folder_settings(request: Request, name: str, body: dict):
+        return _save_settings(request, name, body)
+
+    @router.put("/{name}/memory")
+    def set_folder_memory(request: Request, name: str, body: dict):
+        return _save_settings(request, name, body)
 
     @router.post("/{name}/rename")
     def rename_folder(request: Request, name: str, body: dict):
@@ -121,6 +196,7 @@ def setup_folder_routes(memory_manager: MemoryManager):
         finally:
             db.close()
         folder_memory.rename_policy(user, old, new)
+        moved_documents = folder_documents.rename_project_documents(user, old, new)
         moved_memories = 0
         try:
             entries = memory_manager.load_all_for_update()
@@ -134,7 +210,7 @@ def setup_folder_routes(memory_manager: MemoryManager):
                     moved_memories += 1
             if moved_memories:
                 memory_manager.save(entries)
-        return {"name": new, "chats": moved_chats, "memories": moved_memories}
+        return {"name": new, "chats": moved_chats, "memories": moved_memories, "documents": moved_documents}
 
     @router.get("/move-impact")
     def move_impact(request: Request, session_id: str, to: str = ""):
@@ -142,6 +218,8 @@ def setup_folder_routes(memory_manager: MemoryManager):
         user = effective_user(request)
         current = _session_folder(user, session_id)
         count = folder_memory.move_needs_choice(memory_manager.load(user), user, session_id, current, to or None)
-        return {"session_id": session_id, "from": current, "to": (to or "").strip() or None, "memories": count}
+        documents = folder_documents.documents_needing_move_choice(user, session_id, current, to or None)
+        return {"session_id": session_id, "from": current, "to": (to or "").strip() or None,
+                "memories": count, "documents": documents}
 
     return router

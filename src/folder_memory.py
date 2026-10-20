@@ -14,6 +14,9 @@ changeable later. Two independent settings:
 The default, ``receive="all", share=True``, is exactly the behaviour before
 folders had memory settings, so existing folders and memories are unchanged.
 
+A third setting, ``documents_private``, keeps the folder's documents to itself
+the same way; the document rules are in src/folder_documents.py.
+
 A memory carries a ``folder`` field only when it was saved in a folder that
 does not share. It belongs to the shared pool when it has no ``folder`` or its
 folder shares now. Chats outside any folder see the whole shared pool.
@@ -34,10 +37,11 @@ class FolderMemoryPolicy:
     share: bool = True
     created_at: int = 0
     snapshot_at: int = 0
+    documents_private: bool = False
 
     @property
     def is_default(self) -> bool:
-        return self.receive == "all" and self.share
+        return self.receive == "all" and self.share and not self.documents_private
 
 
 DEFAULT_POLICY = FolderMemoryPolicy()
@@ -72,7 +76,8 @@ def _coerce(raw: Any) -> FolderMemoryPolicy:
         snapshot_at = int(raw.get("snapshot_at") or 0)
     except (TypeError, ValueError):
         created_at = snapshot_at = 0
-    return FolderMemoryPolicy(receive=receive, share=share, created_at=created_at, snapshot_at=snapshot_at)
+    return FolderMemoryPolicy(receive=receive, share=share, created_at=created_at, snapshot_at=snapshot_at,
+                              documents_private=raw.get("documents_private") is True)
 
 
 def get_policy(owner: Optional[str], folder: Any, *, prefs: Optional[dict] = None) -> FolderMemoryPolicy:
@@ -89,12 +94,14 @@ def all_policies(owner: Optional[str]) -> dict[str, FolderMemoryPolicy]:
 
 
 def set_policy(owner: Optional[str], folder: Any, *, receive: str, share: bool,
+               documents_private: Optional[bool] = None,
                now: Optional[int] = None) -> FolderMemoryPolicy:
     """Create or change a folder's policy.
 
     ``snapshot_at`` is taken when the folder is created with ``snapshot``, or
     when it is switched to ``snapshot`` later; it is kept while the folder
     stays in ``snapshot`` so changing ``share`` doesn't move it.
+    ``documents_private`` left as None keeps the folder's current value.
     """
     name = _norm_folder(folder)
     if not name:
@@ -110,7 +117,10 @@ def set_policy(owner: Optional[str], folder: Any, *, receive: str, share: bool,
         snapshot_at = previous.snapshot_at if previous and previous.receive == "snapshot" and previous.snapshot_at else now
     else:
         snapshot_at = 0
-    policy = FolderMemoryPolicy(receive=receive, share=bool(share), created_at=created_at, snapshot_at=snapshot_at)
+    if documents_private is None:
+        documents_private = previous.documents_private if previous else False
+    policy = FolderMemoryPolicy(receive=receive, share=bool(share), created_at=created_at, snapshot_at=snapshot_at,
+                                documents_private=bool(documents_private))
     policies[name] = asdict(policy)
     prefs[PREFS_KEY] = policies
     _save_prefs(owner, prefs)
@@ -198,6 +208,23 @@ def retag_for_move(entries: list[dict], owner: Optional[str], session_id: str, t
         else:
             entry.pop("folder", None)
         changed += 1
+    return changed
+
+
+def tag_chat_memories(entries: list[dict], chat_ids: Iterable[str], folder: Any) -> int:
+    """File untagged memories saved from ``chat_ids`` under ``folder``. Used
+    when a project starts keeping its memories private. Returns the count."""
+    name = _norm_folder(folder)
+    ids = {str(c) for c in chat_ids}
+    if not name or not ids:
+        return 0
+    changed = 0
+    for entry in entries:
+        if not isinstance(entry, dict) or _norm_folder(entry.get("folder")):
+            continue
+        if str(entry.get("session_id") or "") in ids:
+            entry["folder"] = name
+            changed += 1
     return changed
 
 

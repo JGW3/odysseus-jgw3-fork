@@ -1,41 +1,54 @@
-// Projects (chat folders) and their memory settings.
-// Server rules: src/folder_memory.py. Data still lives in a chat's `folder`
-// field; "project" is the name shown to people.
+// Projects: groups of chats that can keep their memories and documents to
+// themselves. Server rules: src/folder_memory.py and src/folder_documents.py.
+// Data still lives in a chat's `folder` field; "project" is the name shown to
+// people. Chats outside any project are in "Main", which sees everything
+// except what compartmentalized projects keep to themselves.
 import uiModule from './ui.js?v=20260916largetoolscroll1';
 
 const API_BASE = window.location.origin;
 
-// The four memory modes offered when a project is created or edited.
-export const PROJECT_MEMORY_MODES = [
+// What a compartmentalized project starts with from Main's memories.
+export const MEMORY_START_OPTIONS = [
   {
-    id: 'shared', receive: 'all', share: true,
-    label: 'Shared',
-    description: 'Uses all your memories and adds to them, like chats outside a project.',
+    id: 'fresh', receive: 'none',
+    label: 'Start fresh',
+    description: 'No memories from Main.',
   },
   {
-    id: 'fresh', receive: 'none', share: false,
-    label: 'Contained, fresh start',
-    description: 'Starts with no memories. Remembers only what happens in this project, and keeps it here.',
+    id: 'frozen', receive: 'snapshot',
+    label: "Start with today's memories",
+    description: 'Knows what Main remembers now, but nothing Main learns later.',
   },
   {
-    id: 'frozen', receive: 'snapshot', share: false,
-    label: 'Start from current memories, then contained',
-    description: "Knows what Odysseus remembers today, but nothing you share later. What happens here stays here.",
-  },
-  {
-    id: 'flowing', receive: 'all', share: false,
-    label: 'Start from current memories, keep receiving',
-    description: 'Keeps getting your new memories from outside. What happens here stays here.',
+    id: 'flowing', receive: 'all',
+    label: 'Keep receiving Main’s memories',
+    description: 'Sees Main’s memories, including new ones.',
   },
 ];
 
-export function modeFor(policy) {
-  const p = policy || {};
-  return PROJECT_MEMORY_MODES.find(m => m.receive === (p.receive || 'all') && m.share === (p.share !== false))
-    || PROJECT_MEMORY_MODES[0];
+// Older policies stored a memory mode; the dialog shows them as settings.
+export function settingsFor(project) {
+  const memory = (project && project.memory) || {};
+  const contained = memory.share === false;
+  const start = MEMORY_START_OPTIONS.find(o => o.receive === (memory.receive || 'all'))
+    || MEMORY_START_OPTIONS[MEMORY_START_OPTIONS.length - 1];
+  return {
+    memoryContained: contained,
+    memoryStart: contained ? start.id : 'fresh',
+    documentsContained: !!(project && project.documents_private),
+  };
+}
+
+export function describeSettings(project) {
+  const s = settingsFor(project);
+  const parts = [];
+  if (s.memoryContained) parts.push('own memory');
+  if (s.documentsContained) parts.push('own documents');
+  return parts.length ? parts.join(', ') : 'shares with Main';
 }
 
 let _projects = [];
+let _sessions = null; // { setProjectGroupSource, renderSessionList, loadSessions }
 
 export function knownProjectNames() {
   return _projects.map(p => p.name);
@@ -46,21 +59,36 @@ export async function refreshProjects() {
     const res = await fetch(`${API_BASE}/api/folders`, { credentials: 'same-origin' });
     if (!res.ok) return _projects;
     const data = await res.json();
-    _projects = Array.isArray(data.folders) ? data.folders : [];
+    _projects = (Array.isArray(data.folders) ? data.folders : []).filter(p => p.name !== 'Assistant');
   } catch (_) { /* keep the last known list */ }
+  if (_sessions) _sessions.renderSessionList();
   return _projects;
 }
 
-async function saveProjectMemory(name, mode) {
-  const res = await fetch(`${API_BASE}/api/folders/${encodeURIComponent(name)}/memory`, {
+async function saveProjectSettings(name, settings) {
+  const start = MEMORY_START_OPTIONS.find(o => o.id === settings.memoryStart) || MEMORY_START_OPTIONS[0];
+  const res = await fetch(`${API_BASE}/api/folders/${encodeURIComponent(name)}/settings`, {
     method: 'PUT',
     credentials: 'same-origin',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ receive: mode.receive, share: mode.share }),
+    body: JSON.stringify({
+      receive: settings.memoryContained ? start.receive : 'all',
+      share: !settings.memoryContained,
+      documents_private: !!settings.documentsContained,
+    }),
   });
   if (!res.ok) throw new Error(await res.text());
-  await refreshProjects();
-  document.dispatchEvent(new CustomEvent('odysseus:projects-changed'));
+  return res.json();
+}
+
+async function renameProject(oldName, newName) {
+  const res = await fetch(`${API_BASE}/api/folders/${encodeURIComponent(oldName)}/rename`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ new_name: newName }),
+  });
+  if (!res.ok) throw new Error(await res.text());
 }
 
 function el(tag, className, text) {
@@ -70,11 +98,11 @@ function el(tag, className, text) {
   return node;
 }
 
-// A modal in the same shape as styledConfirm. `build(body, close)` fills it.
-function openDialog({ title, build, wide = false }) {
+// A modal in the same shape as styledConfirm. `build(body, footer, close)` fills it.
+function openDialog({ title, build }) {
   return new Promise(resolve => {
     const overlay = el('div', 'modal project-dialog-overlay');
-    const box = el('div', 'modal-content styled-confirm-box project-dialog' + (wide ? ' project-dialog-wide' : ''));
+    const box = el('div', 'modal-content styled-confirm-box project-dialog');
     box.setAttribute('role', 'dialog');
     box.setAttribute('aria-modal', 'true');
     const header = el('div', 'modal-header');
@@ -103,91 +131,140 @@ function openDialog({ title, build, wide = false }) {
   });
 }
 
+function checkboxRow(label, description, checked) {
+  const row = el('label', 'project-option');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.checked = !!checked;
+  const text = el('span', 'project-option-text');
+  text.append(el('span', 'project-option-label', label), el('span', 'project-option-desc', description));
+  row.append(box, text);
+  return { row, box };
+}
+
 /**
- * Ask for a project's name (when `askName`) and memory mode.
- * Resolves to { name, mode } or null when cancelled.
+ * The project dialog: name, compartmentalized memory (with what it starts
+ * from) and compartmentalized documents. Resolves to { name, settings } or
+ * null when cancelled.
  */
-export function chooseProjectMemory({ title, name = '', askName = false, policy = null, confirmText = 'Save' } = {}) {
+export function chooseProjectSettings({ title, name = '', project = null, confirmText = 'Save' } = {}) {
+  const current = settingsFor(project);
   return openDialog({
     title,
     build(body, footer, close) {
-      let nameInput = null;
-      if (askName) {
-        nameInput = el('input', 'settings-input project-name-input');
-        nameInput.type = 'text';
-        nameInput.placeholder = 'e.g. Homework, Toronto Inheritance, Taxes';
-        nameInput.value = name;
-        nameInput.setAttribute('aria-label', 'Project name');
-        body.appendChild(nameInput);
-      }
-      body.appendChild(el('p', 'project-mode-intro', 'How should this project use memory?'));
-      let selected = modeFor(policy);
-      const list = el('div', 'project-mode-list');
-      list.setAttribute('role', 'radiogroup');
-      const rows = PROJECT_MEMORY_MODES.map(mode => {
-        const row = el('button', 'ask-user-option project-mode-option');
-        row.type = 'button';
-        row.setAttribute('role', 'radio');
-        row.append(el('span', 'ask-user-option-label', mode.label), el('span', 'ask-user-option-desc', mode.description));
-        row.addEventListener('click', () => { selected = mode; sync(); });
-        list.appendChild(row);
-        return [row, mode];
+      const nameInput = el('input', 'settings-input project-name-input');
+      nameInput.type = 'text';
+      nameInput.placeholder = 'Project name, e.g. Homework';
+      nameInput.value = name;
+      nameInput.setAttribute('aria-label', 'Project name');
+      body.appendChild(nameInput);
+
+      const memory = checkboxRow(
+        'Compartmentalized memory',
+        'What this project remembers stays in this project.',
+        current.memoryContained,
+      );
+      body.appendChild(memory.row);
+      const startList = el('div', 'project-start-list');
+      startList.setAttribute('role', 'radiogroup');
+      startList.setAttribute('aria-label', 'What this project starts with');
+      const radioName = `project-memory-start-${Date.now()}`;
+      MEMORY_START_OPTIONS.forEach(option => {
+        const row = el('label', 'project-option project-start-option');
+        const radio = el('input');
+        radio.type = 'radio';
+        radio.name = radioName;
+        radio.value = option.id;
+        radio.checked = option.id === current.memoryStart;
+        const text = el('span', 'project-option-text');
+        text.append(el('span', 'project-option-label', option.label), el('span', 'project-option-desc', option.description));
+        row.append(radio, text);
+        startList.appendChild(row);
       });
+      body.appendChild(startList);
+
+      const documents = checkboxRow(
+        'Compartmentalized documents',
+        'Documents made here stay here, and the AI in this project only sees this project’s documents.',
+        current.documentsContained,
+      );
+      body.appendChild(documents.row);
+
       function sync() {
-        rows.forEach(([row, mode]) => {
-          const on = mode.id === selected.id;
-          row.classList.toggle('selected', on);
-          row.setAttribute('aria-checked', on ? 'true' : 'false');
-        });
+        startList.hidden = !memory.box.checked;
       }
+      memory.box.addEventListener('change', sync);
       sync();
-      body.appendChild(list);
+
       const cancel = el('button', 'confirm-btn confirm-btn-secondary', 'Cancel');
       const ok = el('button', 'confirm-btn confirm-btn-primary', confirmText);
       cancel.addEventListener('click', () => close(null));
       ok.addEventListener('click', () => {
-        const finalName = askName ? nameInput.value.trim() : name;
-        if (!finalName) { nameInput && nameInput.focus(); return; }
-        close({ name: finalName, mode: selected });
+        const finalName = nameInput.value.trim();
+        if (!finalName) { nameInput.focus(); return; }
+        if (finalName !== name && knownProjectNames().includes(finalName)) {
+          uiModule.showError(`A project called "${finalName}" already exists`);
+          nameInput.focus();
+          return;
+        }
+        const picked = startList.querySelector('input:checked');
+        close({
+          name: finalName,
+          settings: {
+            memoryContained: memory.box.checked,
+            memoryStart: picked ? picked.value : 'fresh',
+            documentsContained: documents.box.checked,
+          },
+        });
       });
+      nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); ok.click(); } });
       footer.append(cancel, ok);
-      (nameInput || ok).focus();
+      nameInput.focus();
     },
   });
 }
 
-/** Create a project with its memory mode. Resolves to the name, or null. */
+/** Create a project. Resolves to its name, or null. */
 export async function createProject({ suggestedName = '' } = {}) {
-  const choice = await chooseProjectMemory({ title: 'New project', name: suggestedName, askName: true, confirmText: 'Create' });
+  const choice = await chooseProjectSettings({ title: 'New project', name: suggestedName, confirmText: 'Create' });
   if (!choice) return null;
   try {
-    await saveProjectMemory(choice.name, choice.mode);
+    await saveProjectSettings(choice.name, choice.settings);
   } catch (err) {
     uiModule.showError('Could not create the project: ' + err.message);
     return null;
   }
+  await refreshProjects();
   return choice.name;
 }
 
-export async function editProjectMemory(project) {
-  const choice = await chooseProjectMemory({
-    title: `Memory for ${project.name}`, name: project.name, policy: project.memory,
-  });
+/** The gear: change a project's name and settings. */
+export async function editProject(project) {
+  const choice = await chooseProjectSettings({ title: 'Project settings', name: project.name, project });
   if (!choice) return false;
   try {
-    await saveProjectMemory(project.name, choice.mode);
-    uiModule.showToast(`${project.name}: ${choice.mode.label}`);
-    return true;
+    let name = project.name;
+    if (choice.name !== name) {
+      await renameProject(name, choice.name);
+      name = choice.name;
+      if (_sessions) await _sessions.loadSessions();
+    }
+    const saved = await saveProjectSettings(name, choice.settings);
+    const filed = (saved.memories_filed || 0) + (saved.documents_filed || 0);
+    uiModule.showToast(filed ? `${name} saved — kept ${filed} existing item${filed === 1 ? '' : 's'} in the project` : `${name} saved`);
   } catch (err) {
     uiModule.showError('Could not save: ' + err.message);
     return false;
   }
+  await refreshProjects();
+  document.dispatchEvent(new CustomEvent('odysseus:projects-changed'));
+  return true;
 }
 
 /**
- * Before moving a chat, ask what happens to its memories when the move
- * changes who can see them. Resolves to 'move', 'keep', '' (nothing to ask)
- * or null (cancelled).
+ * Before moving a chat, ask what happens to its memories and documents when
+ * the move changes who can see them. Resolves to 'move', 'keep', '' (nothing
+ * to ask) or null (cancelled).
  */
 export async function chooseMemoryMove(sessionId, toProject) {
   let impact = null;
@@ -196,70 +273,36 @@ export async function chooseMemoryMove(sessionId, toProject) {
     const res = await fetch(`${API_BASE}/api/folders/move-impact?${qs}`, { credentials: 'same-origin' });
     if (res.ok) impact = await res.json();
   } catch (_) { /* fall through: move without asking */ }
-  if (!impact || !impact.memories) return '';
-  const from = impact.from ? `"${impact.from}"` : 'outside any project';
-  const to = impact.to ? `"${impact.to}"` : 'outside any project';
-  const n = impact.memories;
+  const memories = (impact && impact.memories) || 0;
+  const documents = (impact && impact.documents) || 0;
+  if (!memories && !documents) return '';
+  const from = impact.from ? `"${impact.from}"` : 'Main';
+  const to = impact.to ? `"${impact.to}"` : 'Main';
+  const items = [
+    memories ? `${memories} ${memories === 1 ? 'memory' : 'memories'}` : '',
+    documents ? `${documents} ${documents === 1 ? 'document' : 'documents'}` : '',
+  ].filter(Boolean).join(' and ');
   const result = await uiModule.styledConfirm(
-    `This chat has ${n} ${n === 1 ? 'memory' : 'memories'}, currently filed ${from}. ` +
-    `Move ${n === 1 ? 'it' : 'them'} with the chat to ${to}, or keep ${n === 1 ? 'it' : 'them'} where ${n === 1 ? 'it is' : 'they are'}?`,
-    { title: 'Move chat', confirmText: 'Move memories too', alternateText: 'Keep them where they are', cancelText: 'Cancel' },
+    `This chat has ${items}, currently kept in ${from}. Move them with the chat to ${to}, or keep them where they are?`,
+    { title: 'Move chat', confirmText: 'Move them too', alternateText: 'Keep them where they are', cancelText: 'Cancel' },
   );
   if (result === 'alternate') return 'keep';
   return result ? 'move' : null;
 }
 
-/** The Projects manager: list projects with their memory mode. */
-export async function openProjectsManager() {
-  await refreshProjects();
-  return openDialog({
-    title: 'Projects',
-    wide: true,
-    build(body, footer, close) {
-      function render() {
-        body.textContent = '';
-        if (!_projects.length) {
-          body.appendChild(el('p', 'project-empty', 'No projects yet. A project groups chats and decides how they use memory.'));
-        }
-        const list = el('div', 'project-list');
-        _projects.forEach(project => {
-          const row = el('div', 'project-row');
-          const info = el('div', 'project-row-info');
-          info.appendChild(el('div', 'project-row-name', project.name));
-          const chats = `${project.chats} ${project.chats === 1 ? 'chat' : 'chats'}`;
-          const priv = project.private_memories
-            ? ` · ${project.private_memories} private ${project.private_memories === 1 ? 'memory' : 'memories'}` : '';
-          info.appendChild(el('div', 'project-row-meta', `${chats} · ${modeFor(project.memory).label}${priv}`));
-          const edit = el('button', 'confirm-btn confirm-btn-secondary project-row-edit', 'Memory…');
-          edit.addEventListener('click', async () => {
-            if (await editProjectMemory(project)) render();
-          });
-          row.append(info, edit);
-          list.appendChild(row);
-        });
-        body.appendChild(list);
-      }
-      render();
-      const done = el('button', 'confirm-btn confirm-btn-secondary', 'Close');
-      const add = el('button', 'confirm-btn confirm-btn-primary', 'New project');
-      done.addEventListener('click', () => close(null));
-      add.addEventListener('click', async () => { if (await createProject()) render(); });
-      footer.append(done, add);
-      add.focus();
-    },
-  });
-}
-
-export function init() {
+export function init(sessionApi) {
+  _sessions = sessionApi || null;
+  if (_sessions) {
+    _sessions.setProjectGroupSource({
+      projects: () => _projects,
+      onSettings: project => editProject(project),
+      onNew: () => createProject(),
+    });
+  }
   refreshProjects();
-  document.getElementById('projects-section-title')?.addEventListener('click', () => openProjectsManager());
-  document.getElementById('projects-new-btn')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    createProject();
-  });
 }
 
 export default {
-  PROJECT_MEMORY_MODES, modeFor, knownProjectNames, refreshProjects, chooseProjectMemory,
-  createProject, editProjectMemory, chooseMemoryMove, openProjectsManager, init,
+  MEMORY_START_OPTIONS, settingsFor, describeSettings, knownProjectNames, refreshProjects,
+  chooseProjectSettings, createProject, editProject, chooseMemoryMove, init,
 };

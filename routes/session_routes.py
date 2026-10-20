@@ -529,6 +529,7 @@ def setup_session_routes(
         api_key: str = Form(""),
         endpoint_id: str = Form(""),
         cwd: str = Form(None),
+        folder: str = Form(None),
     ):
         skip_val = str(skip_validation).lower() == "true"
         user = effective_user(request)
@@ -632,6 +633,17 @@ def setup_session_routes(
             cwd=cwd or None,
             endpoint_id=endpoint_id.strip() if endpoint_id else None,
         )
+        # Start the chat inside a project (the sidebar's active project).
+        project = (folder or "").strip()
+        if project:
+            db = SessionLocal()
+            try:
+                db_session = db.query(DbSession).filter(DbSession.id == sid).first()
+                if db_session:
+                    db_session.folder = project
+                    db.commit()
+            finally:
+                db.close()
         # Set auth headers for custom API-key endpoints
         resolved_key = request_api_key
         resolved_base = endpoint_url
@@ -691,10 +703,15 @@ def setup_session_routes(
                 db.close()
             # The user chose whether this chat's memories follow it into the
             # new project ("move") or stay where they are ("keep").
+            # The same choice covers the chat's documents.
             if memory_move and memory_manager is not None:
                 from routes.folder_routes import apply_memory_move
                 result["memories_moved"] = apply_memory_move(
                     memory_manager, effective_user(request), sid, folder or None, memory_move)
+            if memory_move:
+                from routes.folder_routes import apply_document_move
+                result["documents_moved"] = apply_document_move(
+                    effective_user(request), sid, folder or None, memory_move)
         if cwd is not None:
             clean_cwd = cwd.strip() or None
             db = SessionLocal()

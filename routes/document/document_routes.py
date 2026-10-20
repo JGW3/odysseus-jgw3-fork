@@ -181,9 +181,11 @@ def setup_document_routes(session_manager, upload_handler=None) -> APIRouter:
             doc_id = str(uuid.uuid4())
             ver_id = str(uuid.uuid4())
 
+            from src.folder_documents import folder_for_new_document
             doc = Document(
                 id=doc_id,
                 session_id=req.session_id,
+                folder=folder_for_new_document(user or (session.owner if session else None), req.session_id),
                 title=req.title,
                 language=language,
                 current_content=req.content,

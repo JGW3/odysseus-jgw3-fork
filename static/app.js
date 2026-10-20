@@ -4456,7 +4456,11 @@ function startOdysseusApp() {
 	  // Ensure proper initial state
 	  voiceRecorderModule.init();
 	  if (censorModule) censorModule.init();
-	  projectsModule.init();
+	  projectsModule.init({
+	    setProjectGroupSource: sessionModule.setProjectGroupSource,
+	    renderSessionList: sessionModule.renderSessionList,
+	    loadSessions: sessionModule.loadSessions,
+	  });
 
 	  // ── Mobile pull-to-refresh for the active chat ──
 	  (function initMobileChatPullRefresh() {

@@ -90,29 +90,34 @@ def clear_active_document(doc_id: Optional[str] = None) -> bool:
     return False
 
 
-def _owned_document_query(query, Document, owner: Optional[str]):
+def _owned_document_query(query, Document, owner: Optional[str], session_id: Any = None):
+    """Documents ``owner`` owns that a chat in ``session_id``'s project may see
+    (src/folder_documents.py); no chat means every owned document."""
     if owner is None:
         # A bare Python `False` is not a valid SQL expression — SQLAlchemy 1.4
         # deprecates it and 2.0 raises ArgumentError. Use the SQL `false()`
         # literal to return zero rows for an unscoped (owner-less) query.
         from sqlalchemy import false
         return query.filter(false())
-    return query.filter(Document.owner == owner)
+    from src.folder_documents import scope_document_query
+    return scope_document_query(query.filter(Document.owner == owner), Document, owner, session_id)
 
 
-def _get_owned_document(db, Document, doc_id: str, owner: Optional[str], active_only: bool = False):
+def _get_owned_document(db, Document, doc_id: str, owner: Optional[str], active_only: bool = False,
+                        session_id: Any = None):
     q = db.query(Document).filter(Document.id == doc_id)
     if active_only:
         q = q.filter(Document.is_active == True)
-    q = _owned_document_query(q, Document, owner)
+    q = _owned_document_query(q, Document, owner, session_id)
     return q.first()
 
 
-def _most_recent_owned_document(db, Document, owner: Optional[str], active_only: bool = False):
+def _most_recent_owned_document(db, Document, owner: Optional[str], active_only: bool = False,
+                                session_id: Any = None):
     q = db.query(Document)
     if active_only:
         q = q.filter(Document.is_active == True)
-    q = _owned_document_query(q, Document, owner)
+    q = _owned_document_query(q, Document, owner, session_id)
     return q.order_by(Document.updated_at.desc()).first()
 
 
@@ -469,6 +474,8 @@ def _create_pdf_text_derivative(db, *, source_doc, content: str, owner: Optional
     new_doc = Document(
         id=doc_id,
         session_id=getattr(source_doc, "session_id", None),
+        # A derivative stays where its source is.
+        folder=getattr(source_doc, "folder", None),
         title=title,
         language="markdown",
         current_content=clean,
@@ -582,9 +589,11 @@ class CreateDocumentTool:
                     "exit_code": 1,
                 }
 
+            from src.folder_documents import folder_for_new_document
             doc = Document(
                 id=doc_id,
                 session_id=session_id,
+                folder=folder_for_new_document(_owner, session_id),
                 title=title,
                 language=language,
                 current_content=content,
@@ -638,7 +647,7 @@ class UpdateDocumentTool:
         try:
             doc = None
             if target_id:
-                doc = _get_owned_document(db, Document, target_id, owner)
+                doc = _get_owned_document(db, Document, target_id, owner, session_id=ctx.get("session_id"))
             if (
                 not doc
                 and target_id
@@ -648,7 +657,7 @@ class UpdateDocumentTool:
             if not doc:
                 if target_id:
                     return {"error": "Requested document not found; no other document was changed", "exit_code": 1}
-                doc = _most_recent_owned_document(db, Document, owner)
+                doc = _most_recent_owned_document(db, Document, owner, session_id=ctx.get("session_id"))
                 if doc:
                     target_id = doc.id
                     set_active_document(target_id)
@@ -800,7 +809,7 @@ class EditDocumentTool:
         try:
             doc = None
             if target_id:
-                doc = _get_owned_document(db, Document, target_id, owner)
+                doc = _get_owned_document(db, Document, target_id, owner, session_id=ctx.get("session_id"))
             if (
                 not doc
                 and target_id
@@ -812,7 +821,7 @@ class EditDocumentTool:
                     return {"error": "Requested document not found; no other document was changed", "exit_code": 1}
                 # Fallback: most recently updated document. Avoids "no active doc" errors
                 # after server restart or when the agent loses track of which doc to edit.
-                doc = _most_recent_owned_document(db, Document, owner)
+                doc = _most_recent_owned_document(db, Document, owner, session_id=ctx.get("session_id"))
                 if doc:
                     target_id = doc.id
                     set_active_document(target_id)
@@ -1003,7 +1012,7 @@ class SuggestDocumentTool:
 
         db = SessionLocal()
         try:
-            doc = _get_owned_document(db, Document, target_id, owner)
+            doc = _get_owned_document(db, Document, target_id, owner, session_id=ctx.get("session_id"))
             if not doc:
                 return {"error": f"Document {target_id} not found"}
 
@@ -1109,7 +1118,7 @@ class ManageDocumentTool:
         try:
             if action == "list":
                 q = db.query(Document).filter(Document.is_active == True)
-                q = _owned_document_query(q, Document, owner)
+                q = _owned_document_query(q, Document, owner, ctx.get("session_id"))
                 search_text = args.get("search")
                 if search_text:
                     # Tolerate unambiguous conversational framing in a title
@@ -1161,7 +1170,7 @@ class ManageDocumentTool:
                 doc_id = args.get("document_id") or args.get("id") or args.get("uid")
                 if not doc_id:
                     return {"error": "Need document_id (use action=list to find one)", "exit_code": 1}
-                doc = _get_owned_document(db, Document, doc_id, owner, active_only=True)
+                doc = _get_owned_document(db, Document, doc_id, owner, active_only=True, session_id=ctx.get("session_id"))
                 if not doc:
                     return {"error": f"Document '{doc_id}' not found", "exit_code": 1}
                 set_active_document(doc.id)
@@ -1200,12 +1209,12 @@ class ManageDocumentTool:
                 doc_id = args.get("document_id") or args.get("id") or args.get("uid") or ctx.get("doc_id") or _active_document_id
                 doc = None
                 if doc_id:
-                    doc = _get_owned_document(db, Document, doc_id, owner)
+                    doc = _get_owned_document(db, Document, doc_id, owner, session_id=ctx.get("session_id"))
                 if not doc:
                     if doc_id:
                         return {"error": "Requested document not found; no other document was deleted", "exit_code": 1}
                     # Fallback: most recently updated doc (likely what the user means)
-                    doc = _most_recent_owned_document(db, Document, owner, active_only=True)
+                    doc = _most_recent_owned_document(db, Document, owner, active_only=True, session_id=ctx.get("session_id"))
                 if not doc:
                     return {"error": "No document to delete", "exit_code": 1}
                 version_error = _approved_document_version_error(doc, ctx)

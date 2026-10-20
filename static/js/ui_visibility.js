@@ -14,6 +14,7 @@ export const UI_VIS_MAP = {
   'sidebar-brand':       '.sidebar-brand-title',
   'sidebar-new-chat':    '#sidebar-new-chat-btn',
   'sidebar-search':      '#sidebar-search-btn',
+  'projects-section':   '#projects-section',
   'sessions-section':   '#sessions-section',
   'email-section':       '#email-section, #rail-email',
   'tools-section':       '#tools-section',

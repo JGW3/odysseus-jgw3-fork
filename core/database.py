@@ -338,6 +338,10 @@ class Document(TimestampMixin, Base):
     # SET NULL), orphaning the doc and making it vanish from the owner's
     # Library + search. Owning the row directly is robust against that.
     owner           = Column(String, nullable=True, index=True)
+    # Project the document is private to, set only when it was created in a
+    # project that keeps its documents to itself (src/folder_documents.py).
+    # NULL means the shared pool.
+    folder          = Column(String, nullable=True, index=True)
     tidy_verdict    = Column(String, nullable=True)        # "keep", "junk", or None (not yet reviewed)
     # Provenance: if this document was created by opening an email attachment,
     # these point back to the source email so the "Sign and reply" flow can
@@ -1059,6 +1063,31 @@ def _migrate_add_session_generation_settings_columns():
     finally:
         if conn is not None:
             conn.close()
+
+def _migrate_add_document_folder_column():
+    """Add `folder` to documents (project-private documents). Guarded + idempotent."""
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(documents)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "folder" not in columns:
+            conn.execute("ALTER TABLE documents ADD COLUMN folder TEXT")
+            conn.execute("CREATE INDEX IF NOT EXISTS ix_documents_folder ON documents(folder)")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added 'folder' to documents")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"documents.folder migration failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 def _migrate_add_document_archived_column():
     """Add `archived` to documents (soft-archive flag). Guarded + idempotent."""
@@ -2400,6 +2429,7 @@ def init_db():
     _migrate_add_task_run_model_column()
     _migrate_add_owner_column()
     _migrate_add_document_archived_column()
+    _migrate_add_document_folder_column()
     _migrate_add_last_message_at_column()
     _migrate_add_memory_extraction_enabled_column()
     _migrate_add_memory_injection_enabled_column()

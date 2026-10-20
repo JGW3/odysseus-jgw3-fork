@@ -30,6 +30,11 @@ const FOLDER_MAX_VISIBLE = 5;
 let _showAllSessions = false;
 let _expandedFolders = {};  // folderName -> true if "show more" clicked
 let _sortMode = Storage.get('odysseus-session-sort') || 'active'; // default to last active
+// "By project" grouping is gone: Projects in the sidebar replace folders.
+if (_sortMode === 'group') _sortMode = 'active';
+// Which project groups in the Projects section are collapsed (name -> true).
+// '' is Main, the chats outside any project.
+const PROJECT_GROUP_STATE_KEY = 'odysseus-project-groups-collapsed';
 const DATE_SECTION_COLLAPSE_KEY = 'ody-session-date-section-collapsed';
 let _autoCreateInProgress = false; // guard against recursive auto-create
 const _INCOGNITO_SESSIONS_KEY = 'ody-incognito-sessions'; // sessionStorage key for incognito session IDs
@@ -411,32 +416,15 @@ function _normalizeSessionsList(fetched) {
 // Initialize dependencies from app.js (no-op: dependencies now imported directly)
 export function initDependencies() {}
 
-// ── Folder state persistence ──
-const FOLDER_STATE_KEY = 'odysseus-folder-state';
-const FOLDER_ORDER_KEY = 'odysseus-folder-order';
-
-function loadFolderState() {
-  return Storage.getJSON(FOLDER_STATE_KEY, {});
-}
-function saveFolderState(state) {
-  Storage.setJSON(FOLDER_STATE_KEY, state);
-}
-function loadFolderOrder() {
-  return Storage.getJSON(FOLDER_ORDER_KEY, []);
-}
-function saveFolderOrder(order) {
-  Storage.setJSON(FOLDER_ORDER_KEY, order);
-}
-
 /** Project (folder) names from current sessions, plus projects with no chats yet. */
 function getFolderNames() {
   const names = new Set(projectsModule.knownProjectNames());
-  sessions.forEach(s => { if (s.folder) names.add(s.folder); });
+  sessions.forEach(s => { if (s.folder && s.folder !== 'Assistant') names.add(s.folder); });
   return Array.from(names).sort();
 }
 
 /** Move a session to a folder via the API. */
-async function moveToFolder(sessionId, folderName) {
+export async function moveToFolder(sessionId, folderName) {
   // When the move changes who can see this chat's memories, ask whether they
   // go with it. null = the user cancelled the move.
   const memoryMove = await projectsModule.chooseMemoryMove(sessionId, folderName || '');
@@ -454,7 +442,7 @@ async function moveToFolder(sessionId, folderName) {
 
 // Let a chat be dropped directly on a folder/tag. The existing menu action is
 // still available, but drag-and-drop is faster when organizing several chats.
-function wireFolderDropTarget(header, folderName) {
+export function wireFolderDropTarget(header, folderName) {
   header.addEventListener('dragover', (e) => {
     const types = Array.from(e.dataTransfer?.types || []);
     if (!types.includes('application/x-odysseus-session')) return;
@@ -495,7 +483,7 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
   const noneOpt = document.createElement('div');
   noneOpt.className = 'dropdown-item-compact';
   if (!currentFolder) noneOpt.style.opacity = '0.5';
-  noneOpt.textContent = '(No project)';
+  noneOpt.textContent = 'Main (no project)';
   noneOpt.addEventListener('click', async (e) => {
     e.stopPropagation();
     await moveToFolder(sessionId, '');
@@ -513,9 +501,6 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
     opt.addEventListener('click', async (e) => {
       e.stopPropagation();
       await moveToFolder(sessionId, f);
-      // Auto-flip to By Folder view so the user can see where the
-      // chat went, same as when creating a new folder.
-      setSortMode('group');
       dropdown.style.display = 'none';
       sub.style.display = 'none';
     });
@@ -532,10 +517,6 @@ function buildFolderSubmenu(sessionId, currentFolder, dropdown) {
     const name = await projectsModule.createProject();
     if (!name) return;
     await moveToFolder(sessionId, name);
-    // Auto-flip to By Folder view so the user immediately sees the
-    // folder they just created — otherwise the new folder disappears
-    // into the flat list and looks like the action did nothing.
-    setSortMode('group');
     dropdown.style.display = 'none';
     sub.style.display = 'none';
   });
@@ -1330,12 +1311,10 @@ function _renderSessionListImpl() {
 
   const _frag = document.createDocumentFragment();
 
-  // ── Flat sort modes: ignore folders, show one ordered list. ──
-  // Folders are only shown when _sortMode === 'group' (or null/empty
-  // for manual mode). This keeps the picker simple: a folder-grouped
-  // view is one of the sort choices, alongside Last Active / Newest.
-  if (_sortMode && _sortMode !== 'group') {
-    orderedSessions.sort((a, b) => {
+  // One ordered list of every chat: sorted by Last Active or Newest, or in
+  // the saved manual order when no sort is set. Projects groups them below.
+  {
+    if (_sortMode) orderedSessions.sort((a, b) => {
       if (_sortMode === 'newest') return (b.created_at || '').localeCompare(a.created_at || '');
       // "Last active" sorts by the last actual MESSAGE, not updated_at —
       // updated_at is bumped by renames / model swaps / folder moves, which
@@ -1379,264 +1358,136 @@ function _renderSessionListImpl() {
     list.innerHTML = '';
     list.appendChild(_frag);
     _postRenderSessionList(list);
+    _renderProjectGroups(orderedSessions);
     return;
   }
 
-  // ── Group / manual mode: render folders, then unfiled sessions. ──
-  const folderState = loadFolderState();
-  const folders = {}; // folderName -> [sessions]
-  const unfiled = [];
+}
 
-  orderedSessions.forEach(s => {
-    if (s.folder) {
-      if (!folders[s.folder]) folders[s.folder] = [];
-      folders[s.folder].push(s);
-    } else {
-      unfiled.push(s);
-    }
-  });
+// ── Projects section: the same chats, grouped by project. ──
+// Set by projects.js: the project list and its gear / new-project actions.
+let _projectGroupSource = null;
 
-  // Move starred sessions to top of each group, preserving relative order
-  const starPartition = (arr) => {
-    const starred = arr.filter(s => s.is_important);
-    const rest = arr.filter(s => !s.is_important);
-    arr.length = 0;
-    arr.push(...starred, ...rest);
+export function setProjectGroupSource(source) {
+  _projectGroupSource = source || null;
+  renderSessionList();
+}
+
+const _GEAR_ICON = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+
+function _projectGroupHeader(name, label, count, collapsed, project) {
+  const header = document.createElement('div');
+  header.className = 'session-folder-header project-group-header';
+  header.dataset.project = name;
+  header.setAttribute('role', 'button');
+  header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  header.tabIndex = 0;
+  const toggle = document.createElement('span');
+  toggle.className = 'folder-toggle';
+  toggle.textContent = collapsed ? '▶' : '▼';
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'folder-name';
+  nameSpan.textContent = label;
+  const countSpan = document.createElement('span');
+  countSpan.className = 'folder-count';
+  countSpan.textContent = `(${count})`;
+  header.append(toggle, nameSpan, countSpan);
+  if (project && _projectGroupSource && _projectGroupSource.onSettings) {
+    const gear = document.createElement('button');
+    gear.type = 'button';
+    gear.className = 'project-gear-btn';
+    gear.title = `${project.name} settings`;
+    gear.setAttribute('aria-label', `${project.name} settings`);
+    gear.innerHTML = _GEAR_ICON;
+    gear.addEventListener('click', (e) => { e.stopPropagation(); _projectGroupSource.onSettings(project); });
+    header.appendChild(gear);
+  }
+  const flip = () => {
+    const state = Storage.getJSON(PROJECT_GROUP_STATE_KEY, {});
+    state[name] = !collapsed;
+    Storage.setJSON(PROJECT_GROUP_STATE_KEY, state);
+    renderSessionList();
   };
-  starPartition(unfiled);
-  Object.values(folders).forEach(arr => starPartition(arr));
-
-  // Render folders first (above unfiled sessions)
-  const savedFolderOrder = loadFolderOrder();
-  const allFolderNames = Object.keys(folders);
-  const orderedFolderNames = [];
-  savedFolderOrder.forEach(name => {
-    if (allFolderNames.includes(name)) orderedFolderNames.push(name);
+  header.addEventListener('click', (e) => {
+    if (e.target.closest('.project-gear-btn')) return;
+    e.stopPropagation();
+    flip();
   });
-  allFolderNames.forEach(name => {
-    if (!orderedFolderNames.includes(name)) orderedFolderNames.push(name);
+  header.addEventListener('keydown', (e) => {
+    if (e.target !== header || (e.key !== 'Enter' && e.key !== ' ')) return;
+    e.preventDefault();
+    flip();
   });
+  wireFolderDropTarget(header, name);
+  return header;
+}
 
-  orderedFolderNames.forEach(folderName => {
-    const folderDiv = document.createElement('div');
-    folderDiv.className = 'session-folder';
-    folderDiv.dataset.folderName = folderName;
-
-    const header = document.createElement('div');
-    header.className = 'session-folder-header';
-    header.dataset.folderName = folderName;
-    const collapsed = folderState[folderName] === false;
-
-    // Drag handle for folder reordering
-    const dragHandle = document.createElement('span');
-    dragHandle.className = 'folder-drag-handle';
-    dragHandle.textContent = '\u2630';
-    dragHandle.title = 'Drag to reorder project';
-    header.appendChild(dragHandle);
-
-    const toggle = document.createElement('span');
-    toggle.className = 'folder-toggle';
-    toggle.textContent = collapsed ? '\u25B6' : '\u25BC';
-    header.appendChild(toggle);
-
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'folder-name';
-    nameSpan.textContent = folderName;
-    header.appendChild(nameSpan);
-
-    const countSpan = document.createElement('span');
-    countSpan.className = 'folder-count';
-    countSpan.textContent = `(${folders[folderName].length})`;
-    header.appendChild(countSpan);
-
-    // Delete folder button
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'folder-delete-btn';
-    deleteBtn.textContent = '\u00d7';
-    deleteBtn.title = 'Delete project and all its chats';
-    deleteBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const count = folders[folderName].length;
-      if (!await _confirmSessionDeletion(folders[folderName].map(s => s.id), `Delete project "${folderName}" and all ${count} chats inside it? Its private memories are kept.`)) return;
-      for (const s of folders[folderName]) {
-        try {
-          await fetch(_sessionDeletionUrl(s.id), { method: 'DELETE' });
-          _deselectCurrentSession(s.id);
-        } catch (err) {
-          console.error('Failed to delete session:', s.id, err);
-        }
-      }
-      await loadSessions();
-    });
-    header.appendChild(deleteBtn);
-    wireFolderDropTarget(header, folderName);
-
-    let _folderTouchMoved = false;
-    header.addEventListener('touchstart', () => { _folderTouchMoved = false; }, { passive: true });
-    header.addEventListener('touchmove', () => { _folderTouchMoved = true; }, { passive: true });
-    header.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (e.target.closest('.folder-drag-handle') || e.target.closest('.folder-delete-btn')) return;
-      if (_folderTouchMoved) { _folderTouchMoved = false; return; }
-      const state = loadFolderState();
-      const isCollapsed = state[folderName] === false;
-      state[folderName] = isCollapsed ? true : false;
-      saveFolderState(state);
-      renderSessionList();
-    });
-
-    // Allow renaming folder via double-click
-    header.addEventListener('dblclick', async (e) => {
-      e.stopPropagation();
-      if (e.target.closest('.folder-delete-btn')) return;
-      const newName = await styledPrompt('Rename project:', {
-        title: 'Rename project',
-        defaultValue: folderName,
-        confirmText: 'Rename',
-      });
-      if (!newName || !newName.trim() || newName.trim() === folderName) return;
-      // One server call renames the chats, the project's memory settings and
-      // its private memories together (moving each chat would ask about
-      // memories once per chat).
-      await fetch(`${API_BASE}/api/folders/${encodeURIComponent(folderName)}/rename`, {
-        method: 'POST', credentials: 'same-origin',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ new_name: newName.trim() }),
-      });
-      await projectsModule.refreshProjects();
-      await loadSessions();
-    });
-
-    folderDiv.appendChild(header);
-
+function _renderProjectGroups(orderedSessions) {
+  const list = document.getElementById('projects-list');
+  if (!list) return;
+  const projects = (_projectGroupSource && _projectGroupSource.projects()) || [];
+  const byProject = new Map([['', []]]);
+  projects.forEach(p => byProject.set(p.name, []));
+  orderedSessions.forEach(s => {
+    const key = s.folder || '';
+    if (!byProject.has(key)) byProject.set(key, []);
+    byProject.get(key).push(s);
+  });
+  const known = new Map(projects.map(p => [p.name, p]));
+  const names = Array.from(byProject.keys()).filter(n => n).sort((a, b) => a.localeCompare(b));
+  const collapsedState = Storage.getJSON(PROJECT_GROUP_STATE_KEY, {});
+  const frag = document.createDocumentFragment();
+  ['', ...names].forEach(name => {
+    const chats = byProject.get(name) || [];
+    const collapsed = collapsedState[name] === true;
+    const group = document.createElement('div');
+    group.className = 'session-folder project-group';
+    group.dataset.project = name;
+    const project = name ? (known.get(name) || { name, chats: chats.length }) : null;
+    group.appendChild(_projectGroupHeader(name, name || 'Main (default)', chats.length, collapsed, project));
     if (!collapsed) {
       const content = document.createElement('div');
       content.className = 'session-folder-content';
-      const folderSessions = folders[folderName];
-      const folderExpanded = _expandedFolders[folderName];
-      const folderLimit = folderExpanded ? folderSessions.length : FOLDER_MAX_VISIBLE;
-      const visibleFolder = folderSessions.slice(0, folderLimit);
-
-      _appendSessionItemsWithDateHeaders(content, visibleFolder);
-
-      if (folderSessions.length > FOLDER_MAX_VISIBLE) {
-        const rem = folderSessions.length - FOLDER_MAX_VISIBLE;
+      const key = `project:${name}`;
+      const limit = _expandedFolders[key] ? chats.length : FOLDER_MAX_VISIBLE;
+      const sorted = [...chats.filter(s => s.is_important), ...chats.filter(s => !s.is_important)];
+      _appendSessionItemsWithDateHeaders(content, sorted.slice(0, limit));
+      if (!chats.length) {
+        const empty = document.createElement('div');
+        empty.className = 'project-group-empty muted';
+        empty.textContent = name ? 'No chats yet — drag one here or use Move to project.' : 'No chats outside a project.';
+        content.appendChild(empty);
+      }
+      if (chats.length > FOLDER_MAX_VISIBLE) {
         const moreBtn = document.createElement('button');
         moreBtn.className = 'session-show-more-btn';
-        moreBtn.textContent = folderExpanded ? 'Show less' : 'Show all';
+        moreBtn.textContent = _expandedFolders[key] ? 'Show less' : 'Show all';
         moreBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          _expandedFolders[folderName] = !folderExpanded;
+          _expandedFolders[key] = !_expandedFolders[key];
           renderSessionList();
         });
         content.appendChild(moreBtn);
       }
-
-      folderDiv.appendChild(content);
+      group.appendChild(content);
     }
-
-    _frag.appendChild(folderDiv);
+    frag.appendChild(group);
   });
-
-  // Render unfiled sessions below folders (capped unless expanded)
-  const hasFolders = orderedFolderNames.length > 0;
-  const limit = _showAllSessions ? unfiled.length : SIDEBAR_MAX_VISIBLE;
-  const visibleUnfiled = unfiled.slice(0, limit);
-
-  // Wrap in "Unsorted" folder if real folders exist
-  let unfiledTarget = _frag;
-  if (hasFolders && unfiled.length > 0) {
-    const unsortedDiv = document.createElement('div');
-    unsortedDiv.className = 'session-folder unsorted-folder';
-    const unsortedHeader = document.createElement('div');
-    unsortedHeader.className = 'session-folder-header';
-    const unsortedCollapsed = loadFolderState()['__unsorted__'] === false;
-
-    const dragHandle = document.createElement('span');
-    dragHandle.className = 'folder-drag-handle';
-    dragHandle.textContent = '\u2630';
-    dragHandle.title = 'Drag to reorder project';
-    unsortedHeader.appendChild(dragHandle);
-
-    const toggle = document.createElement('span');
-    toggle.className = 'folder-toggle';
-    toggle.textContent = unsortedCollapsed ? '\u25B6' : '\u25BC';
-    unsortedHeader.appendChild(toggle);
-    const nameSpan = document.createElement('span');
-    nameSpan.className = 'folder-name';
-    nameSpan.textContent = 'Unsorted';
-    unsortedHeader.appendChild(nameSpan);
-    const countSpan = document.createElement('span');
-    countSpan.className = 'folder-count';
-    countSpan.textContent = `(${unfiled.length})`;
-    unsortedHeader.appendChild(countSpan);
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.className = 'folder-delete-btn';
-    deleteBtn.textContent = '\u00d7';
-    deleteBtn.title = 'Delete all unsorted sessions';
-    deleteBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      if (!await _confirmSessionDeletion(unfiled.map(s => s.id), `Delete all ${unfiled.length} unsorted chats?`)) return;
-      for (const s of unfiled) {
-        try {
-          await fetch(_sessionDeletionUrl(s.id), { method: 'DELETE' });
-          _deselectCurrentSession(s.id);
-        } catch (err) {
-          console.error('Failed to delete session:', s.id, err);
-        }
-      }
-      await loadSessions();
-    });
-    unsortedHeader.appendChild(deleteBtn);
-    wireFolderDropTarget(unsortedHeader, '');
-
-    unsortedHeader.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const state = loadFolderState();
-      state['__unsorted__'] = state['__unsorted__'] === false ? true : false;
-      saveFolderState(state);
-      renderSessionList();
-    });
-    unsortedDiv.appendChild(unsortedHeader);
-    if (!unsortedCollapsed) {
-      const content = document.createElement('div');
-      content.className = 'session-folder-content';
-      unfiledTarget = content;
-      unsortedDiv.appendChild(content);
-    }
-    _frag.appendChild(unsortedDiv);
-    if (unsortedCollapsed) {
-      unfiledTarget = null;
-    }
+  if (_projectGroupSource && _projectGroupSource.onNew) {
+    const add = document.createElement('div');
+    add.className = 'list-item project-new-item';
+    add.setAttribute('role', 'button');
+    add.tabIndex = 0;
+    add.innerHTML = '<span class="project-list-icon" aria-hidden="true">+</span><span class="grow">New project</span>';
+    const create = () => _projectGroupSource.onNew();
+    add.addEventListener('click', create);
+    add.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); create(); } });
+    frag.appendChild(add);
   }
-
-  if (unfiledTarget) {
-    _appendSessionItemsWithDateHeaders(unfiledTarget, visibleUnfiled);
-  }
-
-  // "Show more" / "Show less" toggle
-  if (unfiledTarget && unfiled.length > SIDEBAR_MAX_VISIBLE) {
-    const remaining = unfiled.length - SIDEBAR_MAX_VISIBLE;
-    const toggleBtn = document.createElement('button');
-    toggleBtn.className = 'session-show-more-btn';
-    toggleBtn.textContent = _showAllSessions ? 'Show less' : 'Show all';
-    toggleBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      _showAllSessions = !_showAllSessions;
-      renderSessionList();
-    });
-    unfiledTarget.appendChild(toggleBtn);
-  }
-
-  // Flush all built elements into the list in one operation
   list.innerHTML = '';
-  list.appendChild(_frag);
-
-  _postRenderSessionList(list);
+  list.appendChild(frag);
 }
 
-/** Shared post-render: highlight, keyboard nav, swipe hint, drag sort */
 function _postRenderSessionList(list) {
   if (currentSessionId) {
     const activeEl = document.querySelector(`.list-item[data-session-id="${currentSessionId}"]`);
@@ -3994,6 +3845,9 @@ const sessionModule = {
   setSessionHasDocs,
   getSortMode,
   setSortMode,
+  setProjectGroupSource,
+  moveToFolder,
+  wireFolderDropTarget,
   deleteCurrentSessionFromTopMenu
 };
 

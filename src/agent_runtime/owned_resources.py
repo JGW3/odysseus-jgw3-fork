@@ -302,7 +302,10 @@ def resolve_owned_operation(operation, *, owner, thread_id, request_id="", docum
                 from core.database import SessionLocal, Document
                 db = SessionLocal()
                 try:
-                    row = db.query(Document).filter(Document.owner == owner, Document.is_active == True).order_by(Document.updated_at.desc(), Document.id).first()
+                    from src.folder_documents import scope_document_query
+                    query = db.query(Document).filter(Document.owner == owner, Document.is_active == True)
+                    query = scope_document_query(query, Document, owner, thread_id)
+                    row = query.order_by(Document.updated_at.desc(), Document.id).first()
                     identifier = row.id if row is not None else ""
                 finally:
                     db.close()
