@@ -115,3 +115,12 @@ def test_rename_carries_the_policy(prefs):
     fm.rename_policy("u", "Old", "New")
     assert fm.get_policy("u", "New").receive == "none"
     assert fm.get_policy("u", "Old").is_default
+
+
+def test_private_memory_projects_are_detected(prefs):
+    assert not fm.has_private_memory_projects("u")
+    fm.set_policy("u", "Shared one", receive="all", share=True)
+    assert not fm.has_private_memory_projects("u")
+    fm.set_policy("u", "Game", receive="none", share=False)
+    assert fm.has_private_memory_projects("u")
+    assert not fm.has_private_memory_projects("someone else")

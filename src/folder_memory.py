@@ -134,6 +134,11 @@ def set_policy(owner: Optional[str], folder: Any, *, receive: str, share: bool,
     return policy
 
 
+def has_private_memory_projects(owner: Optional[str]) -> bool:
+    """Whether any of the owner's projects keeps its memories to itself."""
+    return any(not policy.share for policy in all_policies(owner).values())
+
+
 def rename_policy(owner: Optional[str], old: Any, new: Any) -> None:
     old_name, new_name = _norm_folder(old), _norm_folder(new)
     if not old_name or not new_name or old_name == new_name:

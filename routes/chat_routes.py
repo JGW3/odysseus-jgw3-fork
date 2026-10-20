@@ -3334,10 +3334,16 @@ def setup_chat_routes(
             disabled_tools.add("bash")
         # The built-in Memory MCP server reads the whole memory store and can't
         # know which chat it serves, so it can't respect a project's memory
-        # scope. In a project with its own memory rules, leave it out; the
-        # native manage_memory tool is project-aware.
-        from src.folder_memory import get_policy as _project_memory_policy, session_folder as _project_of
-        if not _project_memory_policy(ctx.user, _project_of(session)).is_default:
+        # scope. Leave it out in a project with its own memory rules, and in
+        # every chat once any project keeps memories private (Main must not
+        # reach them through it). The native manage_memory tool is project-aware.
+        from src.folder_memory import (
+            get_policy as _project_memory_policy,
+            has_private_memory_projects as _has_private_memory_projects,
+            session_folder as _project_of,
+        )
+        if (not _project_memory_policy(ctx.user, _project_of(session)).is_default
+                or _has_private_memory_projects(ctx.user)):
             disabled_tools.add("mcp__memory__manage_memory")
         _model_lower = str(getattr(sess, "model", "") or "").lower()
         _qwen_tool_router_selected = (
