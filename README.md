@@ -5,7 +5,7 @@
 > [!WARNING]
 > **Work in progress: untested.** `wip/projects` is a feature branch on JGW3's personal fork of [Odysseus](https://github.com/odysseus-dev/odysseus). It is upstream `dev` plus a Projects feature that is still being built and hasn't been tested in daily use. It is not the official project and not a release. For the real thing, use [odysseus-dev/odysseus](https://github.com/odysseus-dev/odysseus).
 >
-> **Why Projects.** Memories and documents in Odysseus are global per account, so every chat can see everything. My Sci-fi writing chats don't need to know I'm an electrical engineer, and my recipe chats don't need to know I write Sci-fi under a pen name. Folders group chats in the sidebar, but they don't keep anything apart. The per-chat memory switches work, but you have to flip them in every chat.
+> **Why Projects.** Memories and documents in Odysseus are global per account, so every chat can see everything. My poetry writing sessions don't need to know that I can't fix a lawnmower, and my astrology sessions don't need to know about my science degree. Folders group chats in the sidebar, but they don't keep anything apart. The per-chat memory switches work, but you have to flip them in every chat.
 >
 > **What this branch does:**
 >
