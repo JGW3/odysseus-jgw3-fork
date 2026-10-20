@@ -38,6 +38,7 @@ class FolderMemoryPolicy:
     created_at: int = 0
     snapshot_at: int = 0
     documents_private: bool = False
+    description: str = ""
 
     @property
     def is_default(self) -> bool:
@@ -77,7 +78,8 @@ def _coerce(raw: Any) -> FolderMemoryPolicy:
     except (TypeError, ValueError):
         created_at = snapshot_at = 0
     return FolderMemoryPolicy(receive=receive, share=share, created_at=created_at, snapshot_at=snapshot_at,
-                              documents_private=raw.get("documents_private") is True)
+                              documents_private=raw.get("documents_private") is True,
+                              description=str(raw.get("description") or "")[:500])
 
 
 def get_policy(owner: Optional[str], folder: Any, *, prefs: Optional[dict] = None) -> FolderMemoryPolicy:
@@ -95,13 +97,15 @@ def all_policies(owner: Optional[str]) -> dict[str, FolderMemoryPolicy]:
 
 def set_policy(owner: Optional[str], folder: Any, *, receive: str, share: bool,
                documents_private: Optional[bool] = None,
+               description: Optional[str] = None,
                now: Optional[int] = None) -> FolderMemoryPolicy:
     """Create or change a folder's policy.
 
     ``snapshot_at`` is taken when the folder is created with ``snapshot``, or
     when it is switched to ``snapshot`` later; it is kept while the folder
     stays in ``snapshot`` so changing ``share`` doesn't move it.
-    ``documents_private`` left as None keeps the folder's current value.
+    ``documents_private`` and ``description`` left as None keep the
+    folder's current values.
     """
     name = _norm_folder(folder)
     if not name:
@@ -119,8 +123,11 @@ def set_policy(owner: Optional[str], folder: Any, *, receive: str, share: bool,
         snapshot_at = 0
     if documents_private is None:
         documents_private = previous.documents_private if previous else False
+    if description is None:
+        description = previous.description if previous else ""
     policy = FolderMemoryPolicy(receive=receive, share=bool(share), created_at=created_at, snapshot_at=snapshot_at,
-                                documents_private=bool(documents_private))
+                                documents_private=bool(documents_private),
+                                description=str(description).strip()[:500])
     policies[name] = asdict(policy)
     prefs[PREFS_KEY] = policies
     _save_prefs(owner, prefs)

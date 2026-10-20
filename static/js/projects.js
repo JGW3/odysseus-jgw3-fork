@@ -242,7 +242,8 @@ export async function createProject({ suggestedName = '' } = {}) {
   return choice.name;
 }
 
-/** The gear: change a project's name and settings. */
+/** The gear: change a project's name and settings. Resolves to the
+ * project's (possibly new) name, or false when cancelled or failed. */
 export async function editProject(project) {
   const choice = await chooseProjectSettings({ title: 'Project settings', name: project.name, project });
   if (!choice) return false;
@@ -262,7 +263,7 @@ export async function editProject(project) {
   }
   await refreshProjects();
   document.dispatchEvent(new CustomEvent('odysseus:projects-changed'));
-  return true;
+  return choice.name;
 }
 
 /**
@@ -294,19 +295,260 @@ export async function chooseMemoryMove(sessionId, toProject) {
   return result ? 'move' : null;
 }
 
+// ── Projects window: every project (Manage), and one project's page. ──
+
+function _when(value) {
+  if (!value) return '';
+  const t = typeof value === 'number' ? value * (value < 1e12 ? 1000 : 1) : Date.parse(value.endsWith('Z') || value.includes('+') ? value : value + 'Z');
+  if (!t || Number.isNaN(t)) return '';
+  const diff = Date.now() - t;
+  const h = diff / 3.6e6;
+  if (h < 1) return 'just now';
+  if (h < 24) return `${Math.floor(h)} hour${Math.floor(h) === 1 ? '' : 's'} ago`;
+  return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+let _window = null;
+
+function _closeWindow() {
+  if (!_window) return;
+  document.removeEventListener('keydown', _window.onKey, true);
+  _window.overlay.remove();
+  _window = null;
+}
+
+function _ensureWindow() {
+  if (_window) return _window;
+  const overlay = el('div', 'modal projects-window-overlay');
+  const box = el('div', 'modal-content projects-window');
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.setAttribute('aria-label', 'Projects');
+  const close = el('button', 'close-btn projects-window-close', '✖');
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Close projects');
+  close.addEventListener('click', _closeWindow);
+  const body = el('div', 'projects-window-body');
+  box.append(close, body);
+  overlay.appendChild(box);
+  overlay.addEventListener('click', e => { if (e.target === overlay) _closeWindow(); });
+  const onKey = e => {
+    if (e.key !== 'Escape' || document.querySelector('.project-dialog-overlay')) return;
+    e.preventDefault(); e.stopPropagation(); _closeWindow();
+  };
+  document.addEventListener('keydown', onKey, true);
+  document.body.appendChild(overlay);
+  _window = { overlay, body, onKey };
+  return _window;
+}
+
+/** Manage: every project, with a way to open each one's page. */
+export async function openProjectsWindow() {
+  const win = _ensureWindow();
+  await refreshProjects();
+  const body = win.body;
+  body.textContent = '';
+  const head = el('div', 'projects-window-head');
+  head.appendChild(el('h2', 'projects-window-title', 'Projects'));
+  const add = el('button', 'confirm-btn confirm-btn-primary', 'New project');
+  add.type = 'button';
+  add.addEventListener('click', async () => {
+    const name = await createProject();
+    if (name) openProjectHome(name);
+  });
+  head.appendChild(add);
+  body.appendChild(head);
+  if (!_projects.length) {
+    body.appendChild(el('p', 'projects-window-empty', 'No projects yet. A project groups chats and can keep its own memories and documents.'));
+    return;
+  }
+  const list = el('div', 'projects-window-list');
+  _projects.forEach(project => {
+    const row = el('button', 'projects-window-row');
+    row.type = 'button';
+    const info = el('span', 'projects-window-row-info');
+    info.appendChild(el('span', 'projects-window-row-name', project.name));
+    if (project.description) info.appendChild(el('span', 'projects-window-row-desc', project.description));
+    const chats = `${project.chats} ${project.chats === 1 ? 'chat' : 'chats'}`;
+    info.appendChild(el('span', 'projects-window-row-meta', `${chats} · ${describeSettings(project)}`));
+    row.appendChild(info);
+    row.addEventListener('click', () => openProjectHome(project.name));
+    list.appendChild(row);
+  });
+  body.appendChild(list);
+}
+
+/** A project's page: its chats, its memories and its files. */
+export async function openProjectHome(name) {
+  const win = _ensureWindow();
+  const body = win.body;
+  let data;
+  try {
+    const res = await fetch(`${API_BASE}/api/folders/${encodeURIComponent(name)}/home`, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(await res.text());
+    data = await res.json();
+  } catch (err) {
+    uiModule.showError('Could not open the project: ' + err.message);
+    return;
+  }
+  const project = _projects.find(p => p.name === name) || { name, memory: data.memory, documents_private: data.documents_private };
+  body.textContent = '';
+
+  const back = el('button', 'projects-window-back', '← All projects');
+  back.type = 'button';
+  back.addEventListener('click', openProjectsWindow);
+  body.appendChild(back);
+
+  const page = el('div', 'project-home');
+  const main = el('div', 'project-home-main');
+  const side = el('div', 'project-home-side');
+  page.append(main, side);
+  body.appendChild(page);
+
+  main.appendChild(el('h2', 'project-home-title', data.name));
+  const desc = el('input', 'project-home-desc');
+  desc.type = 'text';
+  desc.value = data.description || '';
+  desc.placeholder = 'Add a description';
+  desc.setAttribute('aria-label', 'Project description');
+  const saveDesc = async () => {
+    const value = desc.value.trim();
+    if (value === (data.description || '')) return;
+    try {
+      const res = await fetch(`${API_BASE}/api/folders/${encodeURIComponent(name)}/settings`, {
+        method: 'PUT', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...data.memory, documents_private: data.documents_private, description: value }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      data.description = value;
+      refreshProjects();
+    } catch (err) {
+      uiModule.showError('Could not save the description: ' + err.message);
+    }
+  };
+  desc.addEventListener('blur', saveDesc);
+  desc.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); desc.blur(); } });
+  main.appendChild(desc);
+
+  const composer = el('div', 'project-home-composer');
+  const input = el('textarea', 'project-home-input');
+  input.rows = 2;
+  input.placeholder = `New chat in ${data.name}`;
+  input.setAttribute('aria-label', `New chat in ${data.name}`);
+  const start = el('button', 'confirm-btn confirm-btn-primary project-home-start', 'Start chat');
+  start.type = 'button';
+  const startChat = () => {
+    const text = input.value.trim();
+    if (!_sessions || !_sessions.setNextChatProject) return;
+    _sessions.setNextChatProject(name);
+    _closeWindow();
+    document.getElementById('sidebar-new-chat-btn')?.click();
+    if (text) {
+      setTimeout(() => {
+        const message = document.getElementById('message');
+        if (!message) return;
+        message.value = text;
+        message.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('chat-form')?.requestSubmit();
+      }, 150);
+    }
+  };
+  start.addEventListener('click', startChat);
+  input.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); startChat(); } });
+  composer.append(input, start);
+  main.appendChild(composer);
+
+  main.appendChild(el('div', 'project-home-heading', 'Recents'));
+  const recents = el('div', 'project-home-list');
+  if (!data.chats.length) recents.appendChild(el('div', 'project-home-empty', 'No chats yet.'));
+  data.chats.forEach(chat => {
+    const row = el('button', 'project-home-row');
+    row.type = 'button';
+    row.append(el('span', 'project-home-row-name', chat.name), el('span', 'project-home-row-when', _when(chat.last_active)));
+    row.addEventListener('click', () => {
+      _closeWindow();
+      window.sessionModule?.selectSession?.(chat.id);
+    });
+    recents.appendChild(row);
+  });
+  main.appendChild(recents);
+
+  // Side panel: settings, memory and files.
+  const settingsRow = el('div', 'project-home-side-row');
+  settingsRow.append(el('span', 'project-home-side-label', 'Settings'));
+  const settingsBtn = el('button', 'project-home-side-action', 'Edit');
+  settingsBtn.type = 'button';
+  settingsBtn.addEventListener('click', async () => {
+    const saved = await editProject(project);
+    if (saved) openProjectHome(saved);
+  });
+  settingsRow.appendChild(settingsBtn);
+  side.appendChild(settingsRow);
+  side.appendChild(el('div', 'project-home-side-note', describeSettings(project)));
+
+  function panel(label, count, items, renderItem, emptyText) {
+    const wrap = el('div', 'project-home-panel');
+    const row = el('div', 'project-home-side-row');
+    const title = el('span', 'project-home-side-label', label);
+    title.appendChild(el('span', 'project-home-side-count', ` ${count}`));
+    const toggle = el('button', 'project-home-side-action', 'View');
+    toggle.type = 'button';
+    const listEl = el('div', 'project-home-side-list');
+    listEl.hidden = true;
+    if (!items.length) listEl.appendChild(el('div', 'project-home-empty', emptyText));
+    items.forEach(item => listEl.appendChild(renderItem(item)));
+    toggle.addEventListener('click', () => {
+      listEl.hidden = !listEl.hidden;
+      toggle.textContent = listEl.hidden ? 'View' : 'Hide';
+    });
+    row.append(title, toggle);
+    wrap.append(row, listEl);
+    side.appendChild(wrap);
+  }
+
+  panel('Memory', data.memories.length, data.memories, memory => {
+    const item = el('div', 'project-home-memory');
+    item.appendChild(el('span', 'project-home-memory-text', memory.text));
+    const meta = [memory.private ? 'kept in this project' : 'shared with Main', _when(memory.timestamp)].filter(Boolean).join(' · ');
+    item.appendChild(el('span', 'project-home-memory-meta', meta));
+    return item;
+  }, 'Nothing remembered from this project yet.');
+
+  panel('Files', data.documents.length, data.documents, doc => {
+    const item = el('button', 'project-home-file');
+    item.type = 'button';
+    item.append(el('span', 'project-home-file-name', doc.title), el('span', 'project-home-file-when', _when(doc.updated_at)));
+    item.addEventListener('click', () => {
+      _closeWindow();
+      window.documentModule?.loadDocument?.(doc.id);
+    });
+    return item;
+  }, 'No documents in this project yet.');
+
+  side.appendChild(el('div', 'project-home-side-note project-home-privacy',
+    data.documents_private || data.memory.share === false ? 'Compartmentalized' : 'Shares with Main'));
+  input.focus();
+}
+
 export function init(sessionApi) {
   _sessions = sessionApi || null;
   if (_sessions) {
     _sessions.setProjectGroupSource({
       projects: () => _projects,
       onSettings: project => editProject(project),
+      onOpen: project => openProjectHome(project.name),
       onNew: () => createProject(),
     });
   }
   refreshProjects();
+  document.getElementById('projects-manage-btn')?.addEventListener('click', e => {
+    e.stopPropagation();
+    openProjectsWindow();
+  });
 }
 
 export default {
   MEMORY_START_OPTIONS, settingsFor, describeSettings, knownProjectNames, refreshProjects,
-  chooseProjectSettings, createProject, editProject, chooseMemoryMove, init,
+  chooseProjectSettings, createProject, editProject, chooseMemoryMove,
+  openProjectsWindow, openProjectHome, init,
 };

@@ -35,6 +35,8 @@ if (_sortMode === 'group') _sortMode = 'active';
 // Which project groups in the Projects section are open (name -> false means
 // open). Groups start collapsed. '' is Main, the chats outside any project.
 const PROJECT_GROUP_STATE_KEY = 'odysseus-project-groups-collapsed';
+// The project the next New Chat starts in (set by a project's page).
+let _nextChatProject = '';
 const DATE_SECTION_COLLAPSE_KEY = 'ody-session-date-section-collapsed';
 let _autoCreateInProgress = false; // guard against recursive auto-create
 const _INCOGNITO_SESSIONS_KEY = 'ody-incognito-sessions'; // sessionStorage key for incognito session IDs
@@ -1368,6 +1370,11 @@ function _renderSessionListImpl() {
 // Set by projects.js: the project list and its gear / new-project actions.
 let _projectGroupSource = null;
 
+/** Start the next New Chat inside ``project`` ('' for Main). */
+export function setNextChatProject(project) {
+  _nextChatProject = String(project || '').trim();
+}
+
 export function setProjectGroupSource(source) {
   _projectGroupSource = source || null;
   renderSessionList();
@@ -1392,6 +1399,12 @@ function _projectGroupHeader(name, label, count, collapsed, project) {
   countSpan.className = 'folder-count';
   countSpan.textContent = `(${count})`;
   header.append(toggle, nameSpan, countSpan);
+  // The name opens the project's page; the rest of the row expands it.
+  if (project && _projectGroupSource && _projectGroupSource.onOpen) {
+    nameSpan.classList.add('project-group-open');
+    nameSpan.title = `Open ${project.name}`;
+    nameSpan.addEventListener('click', (e) => { e.stopPropagation(); _projectGroupSource.onOpen(project); });
+  }
   if (project && _projectGroupSource && _projectGroupSource.onSettings) {
     const gear = document.createElement('button');
     gear.type = 'button';
@@ -2308,7 +2321,8 @@ export function createDirectChat(url, modelId, endpointId, opts = {}) {
   }
 
   // Don't hit the API — just store the model info and prepare the UI
-  _pendingChat = { url, modelId, endpointId, source: incomingSource };
+  _pendingChat = { url, modelId, endpointId, source: incomingSource, project: _nextChatProject };
+  _nextChatProject = '';
   _pendingMaterializePromise = null;
   _skipAutoSelect = true;
   _suppressNextSessionLoading = true;
@@ -2379,6 +2393,7 @@ export async function materializePendingSession() {
     fd.append('name', name);
     fd.append('endpoint_url', pending.url || '');
     fd.append('model', pending.modelId || '');
+    if (pending.project && !isIncognito) fd.append('folder', pending.project);
     if (pending.url && pending.modelId) {
       fd.append('skip_validation', 'true');
     }
@@ -3846,6 +3861,7 @@ const sessionModule = {
   getSortMode,
   setSortMode,
   setProjectGroupSource,
+  setNextChatProject,
   moveToFolder,
   wireFolderDropTarget,
   deleteCurrentSessionFromTopMenu

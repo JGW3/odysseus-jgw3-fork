@@ -514,10 +514,11 @@ body.bg-pattern-ascii-fireflies {
       min-height: 0;
       flex: 0 0 auto;
     }
+    #projects-section { min-height: 0; flex: 0 0 auto; }
     /* Keep a large chat history from pushing the rest of the sidebar below
        the fold. The chat rows scroll independently; the sections beneath
        them stay reachable in the main sidebar scroll area. */
-    #sessions-section #session-list {
+    :is(#sessions-section #session-list, #projects-section #projects-list) {
       max-height: min(42vh, 420px);
       flex: 0 0 auto;
       overflow-y: auto;
@@ -530,11 +531,11 @@ body.bg-pattern-ascii-fireflies {
     }
 
     @media (max-width: 768px) {
-      #sessions-section {
+      #sessions-section, #projects-section {
         flex: 0 0 auto !important;
         overflow: visible !important;
       }
-      #sessions-section #session-list {
+      :is(#sessions-section #session-list, #projects-section #projects-list) {
         max-height: min(34vh, 300px) !important;
         flex: 0 0 auto !important;
         overflow-y: auto !important;
@@ -1233,36 +1234,36 @@ body.bg-pattern-ascii-fireflies {
        opacity:1!important (the email-style plus button forces always-on,
        which we don't want here — the manage button should fade until the
        user actually hovers the section). */
-    #sessions-section .chats-manage-btn {
+    :is(#sessions-section, #projects-section) .chats-manage-btn {
       opacity: 0.4 !important;
       transition: opacity 0.12s, background 0.08s;
     }
-    #sessions-section .section-header-flex:hover .chats-manage-btn,
-    #sessions-section .chats-manage-btn:hover,
-    #sessions-section .chats-manage-btn:focus-visible {
+    :is(#sessions-section, #projects-section) .section-header-flex:hover .chats-manage-btn,
+    :is(#sessions-section, #projects-section) .chats-manage-btn:hover,
+    :is(#sessions-section, #projects-section) .chats-manage-btn:focus-visible {
       opacity: 0.85 !important;
     }
-    #sessions-section .chats-manage-btn:hover,
-    #sessions-section .chats-manage-btn:focus-visible {
+    :is(#sessions-section, #projects-section) .chats-manage-btn:hover,
+    :is(#sessions-section, #projects-section) .chats-manage-btn:focus-visible {
       opacity: 1 !important;
     }
     /* No hover background on the Chats manage button — the inherited
        section-header-btn rule was painting a tinted box behind the
        'manage' label as it slid in. */
-    #sessions-section .chats-manage-btn,
-    #sessions-section .chats-manage-btn:hover,
-    #sessions-section .chats-manage-btn:focus-visible {
+    :is(#sessions-section, #projects-section) .chats-manage-btn,
+    :is(#sessions-section, #projects-section) .chats-manage-btn:hover,
+    :is(#sessions-section, #projects-section) .chats-manage-btn:focus-visible {
       background: transparent !important;
     }
     @media (hover: none) {
-      #sessions-section .chats-manage-btn { opacity: 0.35 !important; }
-      #sessions-section .chats-manage-btn:active { opacity: 1 !important; }
+      :is(#sessions-section, #projects-section) .chats-manage-btn { opacity: 0.35 !important; }
+      :is(#sessions-section, #projects-section) .chats-manage-btn:active { opacity: 1 !important; }
     }
     /* Pull the 'manage' label out of email's absolute-positioning trick
        so it sits in the flex flow and expands the button's clickable
        area as it slides in. Otherwise hovering the visible 'manage'
        text would actually be outside the button's bounding box. */
-    #sessions-section .chats-manage-btn .list-item-plus-label {
+    :is(#sessions-section, #projects-section) .chats-manage-btn .list-item-plus-label {
       position: static;
       transform: none;
       max-width: 0;
@@ -1270,9 +1271,9 @@ body.bg-pattern-ascii-fireflies {
       padding-right: 0;
       transition: max-width 0.2s ease, opacity 0.18s ease, padding-right 0.18s ease;
     }
-    #sessions-section .chats-manage-btn:hover .list-item-plus-label,
-    #sessions-section .chats-manage-btn:focus-visible .list-item-plus-label,
-    #sessions-section .section-header-flex:hover .chats-manage-btn .list-item-plus-label {
+    :is(#sessions-section, #projects-section) .chats-manage-btn:hover .list-item-plus-label,
+    :is(#sessions-section, #projects-section) .chats-manage-btn:focus-visible .list-item-plus-label,
+    :is(#sessions-section, #projects-section) .section-header-flex:hover .chats-manage-btn .list-item-plus-label {
       max-width: 80px;
       padding-right: 4px;
     }
@@ -6469,6 +6470,72 @@ body.bg-pattern-ascii-fireflies {
     /* Project headers read like the sidebar's other rows (same size as a
        chat row), not like the old, larger folder headers. */
     #projects-list .session-folder { margin: 0; }
+    #projects-list .project-group-open { cursor: pointer; }
+    #projects-list .project-group-open:hover { text-decoration: underline; text-underline-offset: 2px; }
+    /* Projects window (Manage) and a project's page. */
+    .projects-window-overlay { align-items: center; justify-content: center; }
+    .projects-window {
+      position: relative; width: min(1000px, 94vw); max-height: 88vh; overflow-y: auto;
+      padding: 22px 26px; box-sizing: border-box; background: var(--bg);
+    }
+    .projects-window-close { position: absolute; top: 12px; right: 14px; }
+    .projects-window-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 28px 14px 0; }
+    .projects-window-title, .project-home-title { margin: 0; font-size: 1.5rem; color: var(--fg); }
+    .projects-window-empty, .project-home-empty { opacity: 0.6; font-size: 0.85rem; padding: 6px 0; }
+    .projects-window-list { display: flex; flex-direction: column; }
+    .projects-window-row, .project-home-row, .project-home-file {
+      all: unset; box-sizing: border-box; display: flex; align-items: center; gap: 12px; width: 100%;
+      padding: 10px 6px; cursor: pointer; color: var(--fg);
+      border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+    }
+    .projects-window-row:hover, .project-home-row:hover, .project-home-file:hover { background: color-mix(in srgb, var(--fg) 4%, transparent); }
+    .projects-window-row:focus-visible, .project-home-row:focus-visible, .project-home-file:focus-visible { outline: 1px solid var(--accent-primary, var(--red)); }
+    .projects-window-row-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+    .projects-window-row-name { font-weight: 600; }
+    .projects-window-row-desc { font-size: 0.85rem; opacity: 0.8; }
+    .projects-window-row-meta { font-size: 0.78rem; opacity: 0.55; }
+    .projects-window-back { all: unset; cursor: pointer; font-size: 0.82rem; opacity: 0.65; margin-bottom: 10px; display: inline-block; }
+    .projects-window-back:hover { opacity: 1; }
+    .project-home { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 28px; }
+    .project-home-desc {
+      all: unset; display: block; width: 100%; box-sizing: border-box; margin: 4px 0 16px;
+      font-size: 0.9rem; color: var(--fg); opacity: 0.75; padding: 2px 0; border-bottom: 1px solid transparent;
+    }
+    .project-home-desc:hover, .project-home-desc:focus { border-bottom-color: var(--border); opacity: 1; }
+    .project-home-composer {
+      display: flex; flex-direction: column; gap: 8px; padding: 12px; margin-bottom: 20px;
+      border: 1px solid var(--border); border-radius: 12px;
+    }
+    .project-home-input {
+      all: unset; width: 100%; min-height: 40px; color: var(--fg); font-size: 0.92rem; resize: none; white-space: pre-wrap;
+    }
+    .project-home-start { align-self: flex-end; }
+    .project-home-heading { font-size: 0.82rem; opacity: 0.6; margin: 4px 0 4px; }
+    .project-home-row-name, .project-home-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .project-home-row-when, .project-home-file-when { font-size: 0.78rem; opacity: 0.55; flex-shrink: 0; }
+    .project-home-side { display: flex; flex-direction: column; gap: 4px; padding-top: 6px; }
+    .project-home-side-row {
+      display: flex; align-items: center; justify-content: space-between; gap: 8px;
+      padding: 10px 0; border-bottom: 1px solid color-mix(in srgb, var(--fg) 8%, transparent); color: var(--fg);
+    }
+    .project-home-side-label { font-weight: 600; font-size: 0.92rem; }
+    .project-home-side-count { font-weight: 400; opacity: 0.55; font-size: 0.8rem; }
+    .project-home-side-action { all: unset; cursor: pointer; font-size: 0.85rem; opacity: 0.8; }
+    .project-home-side-action:hover, .project-home-side-action:focus-visible { opacity: 1; text-decoration: underline; }
+    .project-home-side-note { font-size: 0.78rem; opacity: 0.55; padding: 4px 0 8px; }
+    .project-home-side-list { display: flex; flex-direction: column; max-height: 320px; overflow-y: auto; }
+    .project-home-side-list[hidden] { display: none; }
+    .project-home-memory {
+      display: flex; flex-direction: column; gap: 2px; padding: 8px 0; font-size: 0.85rem; color: var(--fg);
+      border-bottom: 1px solid color-mix(in srgb, var(--fg) 6%, transparent);
+    }
+    .project-home-memory-meta { font-size: 0.72rem; opacity: 0.5; }
+    .project-home-file { padding: 8px 0; font-size: 0.85rem; }
+    .project-home-privacy { margin-top: 10px; }
+    @media (max-width: 768px) {
+      .projects-window { padding: 16px; width: 100vw; max-height: 100vh; border-radius: 0; }
+      .project-home { grid-template-columns: 1fr; gap: 12px; }
+    }
     #projects-list .project-group-header {
       font-size: 13px; font-weight: 400; line-height: 16.9px;
       padding: 3px 8px; min-height: 24px; box-sizing: border-box;

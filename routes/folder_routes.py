@@ -125,6 +125,7 @@ def setup_folder_routes(memory_manager: MemoryManager):
                 "private_documents": private_docs.get(name, 0),
                 "memory": _policy_dict(policies.get(name, default)),
                 "documents_private": policies.get(name, default).documents_private,
+                "description": policies.get(name, default).description,
             }
             for name in names
         ]}
@@ -134,10 +135,12 @@ def setup_folder_routes(memory_manager: MemoryManager):
         folder = name.strip()
         before = folder_memory.get_policy(user, folder)
         documents_private = body.get("documents_private")
+        description = body.get("description")
         try:
             policy = folder_memory.set_policy(
                 user, folder, receive=str(body.get("receive") or "all"), share=body.get("share") is not False,
-                documents_private=None if documents_private is None else documents_private is True)
+                documents_private=None if documents_private is None else documents_private is True,
+                description=None if description is None else str(description))
         except ValueError as error:
             raise HTTPException(400, str(error))
         # Turning compartmentalization on files what the project's chats
@@ -148,7 +151,7 @@ def setup_folder_routes(memory_manager: MemoryManager):
         if policy.documents_private and not before.documents_private:
             tagged_documents = folder_documents.tag_project_documents(user, folder)
         return {"name": folder, "memory": _policy_dict(policy),
-                "documents_private": policy.documents_private,
+                "documents_private": policy.documents_private, "description": policy.description,
                 "memories_filed": tagged_memories, "documents_filed": tagged_documents}
 
     def _tag_project_memories(user, folder) -> int:
@@ -211,6 +214,57 @@ def setup_folder_routes(memory_manager: MemoryManager):
             if moved_memories:
                 memory_manager.save(entries)
         return {"name": new, "chats": moved_chats, "memories": moved_memories, "documents": moved_documents}
+
+    @router.get("/{name}/home")
+    def project_home(request: Request, name: str):
+        """A project's page: its chats, the memories made in it and its files."""
+        from core.database import Document
+        user = effective_user(request)
+        folder = name.strip()
+        policy = folder_memory.get_policy(user, folder)
+        db = SessionLocal()
+        try:
+            query = db.query(DbSession).filter(DbSession.folder == folder, DbSession.archived == False)  # noqa: E712
+            if user:
+                query = query.filter(DbSession.owner == user)
+            chats = query.all()
+            chat_ids = {c.id for c in chats}
+            # Like the sidebar: a chat with no messages and no document yet
+            # isn't listed (it's still being started).
+            with_docs = {r[0] for r in db.query(Document.session_id).filter(Document.session_id.in_(sorted(chat_ids)))} if chat_ids else set()
+            listed = [c for c in chats if (c.message_count or 0) > 0 or c.id in with_docs]
+            chat_rows = sorted((
+                {"id": c.id, "name": c.name or "Untitled chat",
+                 "last_active": (c.last_message_at or c.updated_at or c.created_at).isoformat()
+                 if (c.last_message_at or c.updated_at or c.created_at) else None}
+                for c in listed), key=lambda c: c["last_active"] or "", reverse=True)
+            docs = db.query(Document).filter(Document.archived == False)  # noqa: E712
+            if user:
+                docs = docs.filter(Document.owner == user)
+            from sqlalchemy import or_
+            conditions = [Document.folder == folder]
+            if chat_ids:
+                conditions.append(Document.session_id.in_(sorted(chat_ids)))
+            doc_rows = [
+                {"id": d.id, "title": d.title or "Untitled", "language": d.language,
+                 "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+                 "private": (d.folder or "") == folder}
+                for d in docs.filter(or_(*conditions)).order_by(Document.updated_at.desc()).limit(200).all()
+            ]
+        finally:
+            db.close()
+        memories = [
+            {"id": e.get("id"), "text": e.get("text") or "", "category": e.get("category"),
+             "timestamp": e.get("timestamp"), "private": str(e.get("folder") or "").strip() == folder}
+            for e in memory_manager.load(user)
+            if str(e.get("folder") or "").strip() == folder or str(e.get("session_id") or "") in chat_ids
+        ]
+        memories.sort(key=lambda m: m.get("timestamp") or 0, reverse=True)
+        return {
+            "name": folder, "description": policy.description,
+            "memory": _policy_dict(policy), "documents_private": policy.documents_private,
+            "chats": chat_rows, "memories": memories, "documents": doc_rows,
+        }
 
     @router.get("/move-impact")
     def move_impact(request: Request, session_id: str, to: str = ""):
