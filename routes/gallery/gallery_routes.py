@@ -381,7 +381,10 @@ def _extract_ai_tag_response_text(data: dict, provider: str) -> str:
         if isinstance(raw_content, list):
             from src.llm_core import _normalize_mistral_content
             text_part, thinking_part = _normalize_mistral_content(raw_content)
-            content = (thinking_part + "\n\n" + (text_part or "")) if thinking_part else (text_part or msg.get("reasoning_content") or "")
+            # Tags come from the visible answer only. llm_core joins a thinking
+            # block onto the text untagged, which strip_think cannot separate,
+            # so reasoning words would land in the tag list.
+            content = (text_part or "") if thinking_part else (text_part or msg.get("reasoning_content") or "")
         else:
             content = raw_content or msg.get("reasoning_content") or ""
     from src.text_helpers import strip_think
@@ -2338,7 +2341,7 @@ def setup_gallery_routes() -> APIRouter:
             if provider == "anthropic":
                 payload = {
                     "model": model_name,
-                    "max_tokens": 200,
+                    "max_tokens": VISION_MAX_TOKENS,
                     "messages": [{
                         "role": "user",
                         "content": [
