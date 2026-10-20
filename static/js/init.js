@@ -110,7 +110,8 @@ document.addEventListener('DOMContentLoaded', markComposerUserEdited, { once: tr
 {
   const KEY = Storage.KEYS.SIDEBAR_COLLAPSED;
   const saved = Storage.getJSON(KEY, {});
-  const _defaultCollapsed = { 'sessions-section': true };
+  // First open: Projects and Chats open, Tools folded away.
+  const _defaultCollapsed = { 'tools-section': true };
   document.querySelectorAll('.sidebar .section').forEach((section) => {
     const id = section.id;
     if (!id) return;

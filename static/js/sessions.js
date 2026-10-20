@@ -32,8 +32,8 @@ let _expandedFolders = {};  // folderName -> true if "show more" clicked
 let _sortMode = Storage.get('odysseus-session-sort') || 'active'; // default to last active
 // "By project" grouping is gone: Projects in the sidebar replace folders.
 if (_sortMode === 'group') _sortMode = 'active';
-// Which project groups in the Projects section are collapsed (name -> true).
-// '' is Main, the chats outside any project.
+// Which project groups in the Projects section are open (name -> false means
+// open). Groups start collapsed. '' is Main, the chats outside any project.
 const PROJECT_GROUP_STATE_KEY = 'odysseus-project-groups-collapsed';
 const DATE_SECTION_COLLAPSE_KEY = 'ody-session-date-section-collapsed';
 let _autoCreateInProgress = false; // guard against recursive auto-create
@@ -1439,7 +1439,7 @@ function _renderProjectGroups(orderedSessions) {
   const frag = document.createDocumentFragment();
   ['', ...names].forEach(name => {
     const chats = byProject.get(name) || [];
-    const collapsed = collapsedState[name] === true;
+    const collapsed = collapsedState[name] !== false;
     const group = document.createElement('div');
     group.className = 'session-folder project-group';
     group.dataset.project = name;
