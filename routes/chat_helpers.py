@@ -411,6 +411,19 @@ class PreprocessedMessage:
     youtube_transcripts: list
     attachment_meta: list
 
+    @property
+    def images_sent_to_model(self) -> bool:
+        """True when this turn's request still carries an image part.
+
+        preprocess_message strips image parts for text-only models and when
+        vision is disabled, so this is the answering route's own decision
+        about whether it was allowed to see the image.
+        """
+        return isinstance(self.user_content, list) and any(
+            isinstance(part, dict) and part.get("type") == "image_url"
+            for part in self.user_content
+        )
+
 
 @dataclass
 class ChatContext:
@@ -1731,10 +1744,16 @@ async def _caption_multimodal_image_attachments(
         text = (text or "").strip()
         if not text:
             continue
+        cache_dir = os.path.join(UPLOAD_DIR, ".vision")
+        cache_path = os.path.join(cache_dir, f"{att_id}.txt")
+        # Re-check right before writing: the user may have saved a correction
+        # (possibly an intentionally empty one) while the caption request ran.
+        # Only an absent cache or an earlier generated one may be replaced.
+        if os.path.exists(cache_path) and not os.path.exists(cache_path + ".autogen"):
+            logger.info("[multimodal-caption] %s gained a caption while describing; keeping it", att_id)
+            continue
         try:
-            cache_dir = os.path.join(UPLOAD_DIR, ".vision")
             os.makedirs(cache_dir, exist_ok=True)
-            cache_path = os.path.join(cache_dir, f"{att_id}.txt")
             with open(cache_path, "w", encoding="utf-8") as f:
                 f.write(text)
             # Marker only — presence, not content, is what matters. Cleared by
@@ -1770,6 +1789,7 @@ def run_post_response_tasks(
     preset_manager=None,
     persona_memory_schema: str = "general",
     attachment_meta: list | None = None,
+    caption_images_sent: bool = False,
     caption_endpoint_url: str | None = None,
     caption_model: str | None = None,
     caption_headers: dict | None = None,
@@ -1807,8 +1827,13 @@ def run_post_response_tasks(
     # explicit-fallback routing switched candidates) — never sess.model
     # directly, since sess.model can be the originally-requested model while
     # a different one actually produced the response and saw the image.
+    #
+    # caption_images_sent is whether this turn's request actually carried the
+    # image (PreprocessedMessage.images_sent_to_model). A text-only or
+    # vision-disabled turn strips it, so captioning must not send it either.
     if (
         allow_background_extraction and not incognito and not compare_mode
+        and caption_images_sent
         and attachment_meta and caption_endpoint_url and caption_model and upload_handler
     ):
         _img_atts = [
