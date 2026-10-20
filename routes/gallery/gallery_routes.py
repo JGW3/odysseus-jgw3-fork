@@ -42,6 +42,68 @@ def _gallery_filename_is_video(filename: str) -> bool:
     return ext in _GALLERY_VIDEO_EXTS
 
 
+class VisionRequestError(ValueError):
+    """A gallery vision call that failed for a reason the user can act on.
+
+    Each subclass carries one fixed, hand-written message. Routes answer with
+    ``_vision_error_message(err)``, which picks the message by type, so no
+    exception text ever reaches a client response.
+    """
+    message = "Vision model request failed"
+
+    def __init__(self):
+        super().__init__(self.message)
+
+
+class VisionDisabledError(VisionRequestError):
+    message = "Vision is disabled — enable it in Settings → AI Defaults → Vision"
+
+
+class VisionNotConfiguredError(VisionRequestError):
+    message = "No vision model configured — set one in Settings → AI Defaults → Vision"
+
+
+class VisionEndpointError(VisionRequestError):
+    message = "Could not resolve a vision endpoint"
+
+
+class VisionModelNotCapableError(VisionRequestError):
+    message = ("That model doesn't look vision-capable. Pick a vision model, or leave "
+               "it blank to use Settings → AI Defaults → Vision.")
+
+
+class VisionUnsupportedFileError(VisionRequestError):
+    message = "AI descriptions and tags support PNG, JPEG, WebP and GIF images only"
+
+
+class VisionThinkingOnlyError(VisionRequestError):
+    message = ("This vision model spent its whole budget thinking instead of answering. "
+               "Try again, or switch to a different vision model in Settings → AI Defaults → Vision.")
+
+
+class VisionNoEndpointError(VisionRequestError):
+    message = "No vision model endpoint configured"
+
+
+_VISION_ERROR_TYPES = (
+    VisionDisabledError, VisionNotConfiguredError, VisionEndpointError,
+    VisionModelNotCapableError, VisionUnsupportedFileError, VisionThinkingOnlyError,
+    VisionNoEndpointError,
+)
+
+
+def _vision_error_message(err: Exception) -> str:
+    for kind in _VISION_ERROR_TYPES:
+        if isinstance(err, kind):
+            return kind.message
+    return VisionRequestError.message
+
+
+# Image types a vision request can carry (the same set the gallery upload
+# route accepts as images).
+_VISION_IMAGE_FORMATS = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".gif": "gif", ".webp": "webp"}
+
+
 async def _resolve_vision_candidates(
     model_override: str, owner: Optional[str], session_id: Optional[str] = None,
 ) -> list:
@@ -59,7 +121,7 @@ async def _resolve_vision_candidates(
     up to its timeout, which shows up as avoidable per-image latency when
     OCR/tagging is run over a batch. `asyncio.to_thread` moves it off-loop.
 
-    Raises ValueError with a user-facing message on any resolution failure.
+    Raises a VisionRequestError subclass on any resolution failure.
     """
     from src.document_processor import _load_vl_settings, _resolve_vl_model
     from src.endpoint_resolver import resolve_vision_fallback_candidates
@@ -68,21 +130,18 @@ async def _resolve_vision_candidates(
     def _resolve():
         vl_settings = _load_vl_settings()
         if not vl_settings.get("vision_enabled", True):
-            raise ValueError("Vision is disabled — enable it in Settings → AI Defaults → Vision")
+            raise VisionDisabledError()
         configured = (model_override or "").strip() or vl_settings.get("vision_model", "")
         try:
             primary = _resolve_vl_model(configured, owner=owner, session_id=session_id)
         except ValueError:
-            raise ValueError("No vision model configured — set one in Settings → AI Defaults → Vision")
+            raise VisionNotConfiguredError()
         if not primary[0]:
-            raise ValueError("Could not resolve a vision endpoint")
+            raise VisionEndpointError()
         # Only gate on an explicit per-call override — the admin-configured
         # default is trusted as-is, same as everywhere else it's used.
         if model_override and not model_supports_vision(primary[1], primary[0]):
-            raise ValueError(
-                f"'{primary[1]}' doesn't look like a vision-capable model. Pick a "
-                "vision model, or leave it blank to use Settings → AI Defaults → Vision."
-            )
+            raise VisionModelNotCapableError()
         try:
             fallbacks = resolve_vision_fallback_candidates(owner=owner)
         except Exception:
@@ -110,17 +169,20 @@ async def _call_vision_model(
     ChatGPT Subscription) instead of the two hand-built request shapes this
     route used to speak, which made it fail outright against the other two.
 
-    Returns (text, model_name_that_answered). Raises ValueError with a
-    user-facing message if every candidate failed or returned nothing.
+    Returns (text, model_name_that_answered). Raises a VisionRequestError
+    subclass for an unsupported file, or if every candidate failed or
+    returned nothing.
     """
     from src.llm_core import llm_call_async
     from src.text_helpers import strip_think
 
-    candidates = await _resolve_vision_candidates(model_override, owner, session_id)
+    # Reject anything that isn't a supported image before resolving models
+    # or reading bytes, instead of sending it labelled as JPEG.
+    img_format = _VISION_IMAGE_FORMATS.get(image_path.suffix.lower())
+    if not img_format:
+        raise VisionUnsupportedFileError()
 
-    ext = image_path.suffix.lower()
-    mime_map = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".gif": "gif", ".webp": "webp"}
-    img_format = mime_map.get(ext, "jpeg")
+    candidates = await _resolve_vision_candidates(model_override, owner, session_id)
     b64 = base64.b64encode(image_path.read_bytes()).decode()
     messages = [{
         "role": "user",
@@ -155,14 +217,10 @@ async def _call_vision_model(
         empty_seen = True
 
     if empty_seen:
-        raise ValueError(
-            "This vision model spent its whole budget thinking instead of "
-            "answering. Try again, or switch to a different vision model in "
-            "Settings → AI Defaults → Vision."
-        )
+        raise VisionThinkingOnlyError()
     if last_err is not None:
-        raise ValueError("Vision model request failed")
-    raise ValueError("No vision model endpoint configured")
+        raise VisionRequestError()
+    raise VisionNoEndpointError()
 
 _SAM_STATE: Dict[str, Any] = {}
 _GROUNDING_STATE: Dict[str, Any] = {}
@@ -2483,16 +2541,8 @@ def setup_gallery_routes() -> APIRouter:
                     img_path, VISION_DESCRIBE_PROMPT, user, model_override=(model or ""),
                     session_id=img.session_id,
                 )
-            except ValueError as vision_err:
-                # Deliberately not caught as `e` — this file's own hardening
-                # test (test_no_raw_exception_string_in_client_responses)
-                # forbids returning a caught exception's text to the client,
-                # as a guard against raw exception internals leaking through.
-                # It doesn't apply here: every ValueError _call_vision_model
-                # raises carries a hand-authored, client-safe message (see
-                # its docstring) — it never wraps a caught exception's own
-                # text, so surfacing it to the client is intentional.
-                return {"error": str(vision_err)}
+            except VisionRequestError as vision_err:
+                return {"error": _vision_error_message(vision_err)}
 
             img.caption = caption
             db.commit()
@@ -2529,9 +2579,8 @@ def setup_gallery_routes() -> APIRouter:
                 content, _model_name = await _call_vision_model(
                     img_path, tag_prompt, user, session_id=img.session_id,
                 )
-            except ValueError as vision_err:
-                # See the matching comment in ocr_image above.
-                return {"error": str(vision_err)}
+            except VisionRequestError as vision_err:
+                return {"error": _vision_error_message(vision_err)}
 
             # Clean up tags
             tags = [t.strip().lower() for t in content.split(",") if t.strip()]

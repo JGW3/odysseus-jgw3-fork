@@ -1952,6 +1952,9 @@ function _openDetail(img) {
           _updateOcrCount();
         }
         img.caption = data.caption || '';
+        // img is the shared _items entry; re-render the grid too, since each
+        // card's label comes from its caption.
+        _renderGrid();
         uiModule.showToast(data.skipped ? 'Already described' : 'Description added');
         _openDetail(img); // re-render detail
       } else {
@@ -2463,7 +2466,8 @@ export function openGallery() {
       };
       const ids = [];
       (data.items || []).forEach(item => {
-        if (item.offline) return;
+        // Image-generation and other non-chat endpoints can't describe a photo.
+        if (item.offline || (item.model_type || 'llm') !== 'llm') return;
         (item.models || []).forEach(mid => { if (mid && _looksVision(mid) && !ids.includes(mid)) ids.push(mid); });
       });
       ids.sort((a, b) => String(a).localeCompare(String(b)));
