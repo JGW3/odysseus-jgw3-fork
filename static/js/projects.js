@@ -147,8 +147,12 @@ function checkboxRow(label, description, checked) {
  * from) and compartmentalized documents. Resolves to { name, settings } or
  * null when cancelled.
  */
+// A new project starts compartmentalized: its own memory, starting fresh,
+// and its own documents.
+const NEW_PROJECT_SETTINGS = { memoryContained: true, memoryStart: 'fresh', documentsContained: true };
+
 export function chooseProjectSettings({ title, name = '', project = null, confirmText = 'Save' } = {}) {
-  const current = settingsFor(project);
+  const current = project ? settingsFor(project) : { ...NEW_PROJECT_SETTINGS };
   return openDialog({
     title,
     build(body, footer, close) {
