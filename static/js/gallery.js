@@ -2437,7 +2437,7 @@ export function openGallery() {
                 <button class="memory-toolbar-btn" id="gallery-clear-captions-btn" title="Remove all AI-generated descriptions from every photo">Clear AI descriptions</button>
                 <button class="memory-toolbar-btn" id="gallery-ocr-all-btn" title="Generate AI descriptions for photos that don't have one (in the current album, if any)">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-2px;margin-right:5px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-                  Start AI OCR
+                  Start AI descriptions
                 </button>
               </div>
             </div>
