@@ -6483,6 +6483,8 @@ body.bg-pattern-ascii-fireflies {
     .project-start-list { margin: 0 0 4px 22px; display: flex; flex-direction: column; }
     .project-start-list[hidden] { display: none; }
     .project-start-option { padding: 3px 0; font-size: 0.85rem; }
+    /* Delete sits on the left of the dialog footer, apart from Cancel/Save. */
+    .project-dialog .modal-footer .project-delete-btn { margin-right: auto; color: var(--color-error, var(--red)); }
     /* Project headers keep the folder-header look; the gear is sized so a
        row with one is no taller than Main's (buttons carry a min-height). */
     #projects-list .project-group-header .project-gear-btn {

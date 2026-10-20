@@ -203,6 +203,12 @@ export function chooseProjectSettings({ title, name = '', project = null, confir
       const cancel = el('button', 'confirm-btn confirm-btn-secondary', 'Cancel');
       const ok = el('button', 'confirm-btn confirm-btn-primary', confirmText);
       cancel.addEventListener('click', () => close(null));
+      if (project) {
+        const remove = el('button', 'confirm-btn confirm-btn-secondary project-delete-btn', 'Delete project');
+        remove.type = 'button';
+        remove.addEventListener('click', () => close({ action: 'delete' }));
+        footer.appendChild(remove);
+      }
       ok.addEventListener('click', () => {
         const finalName = nameInput.value.trim();
         if (!finalName) { nameInput.focus(); return; }
@@ -247,6 +253,10 @@ export async function createProject({ suggestedName = '' } = {}) {
 export async function editProject(project) {
   const choice = await chooseProjectSettings({ title: 'Project settings', name: project.name, project });
   if (!choice) return false;
+  if (choice.action === 'delete') {
+    await deleteProject(project);
+    return false;
+  }
   try {
     let name = project.name;
     if (choice.name !== name) {
@@ -264,6 +274,42 @@ export async function editProject(project) {
   await refreshProjects();
   document.dispatchEvent(new CustomEvent('odysseus:projects-changed'));
   return choice.name;
+}
+
+/**
+ * Delete a project. Asks whether its chats, memories and documents are
+ * deleted too, or moved to Main. Resolves to true when it was deleted.
+ */
+export async function deleteProject(project) {
+  const name = project.name;
+  const answer = await uiModule.styledConfirm(
+    `Delete the project "${name}"?\n\n` +
+    'Delete everything: its chats, and the memories and documents it keeps to itself, are deleted.\n' +
+    'Move chats to Main: the chats move to Main, and its memories and documents become visible to Main.',
+    { title: 'Delete project', confirmText: 'Delete everything', alternateText: 'Move chats to Main', cancelText: 'Cancel', danger: true },
+  );
+  if (!answer) return false;
+  const mode = answer === 'alternate' ? 'move' : 'everything';
+  try {
+    if (mode === 'everything' && _sessions && _sessions.deleteChats) {
+      const res = await fetch(`${API_BASE}/api/folders/${encodeURIComponent(name)}/chat-ids`, { credentials: 'same-origin' });
+      if (!res.ok) throw new Error(await res.text());
+      const { chat_ids: ids = [] } = await res.json();
+      if (ids.length && !await _sessions.deleteChats(ids, `Delete ${ids.length === 1 ? 'the chat' : `all ${ids.length} chats`} in "${name}"?`)) return false;
+    }
+    const res = await fetch(`${API_BASE}/api/folders/${encodeURIComponent(name)}?mode=${mode}`, {
+      method: 'DELETE', credentials: 'same-origin',
+    });
+    if (!res.ok) throw new Error(await res.text());
+  } catch (err) {
+    uiModule.showError('Could not delete the project: ' + err.message);
+    return false;
+  }
+  if (_window) _closeWindow();
+  await refreshProjects();
+  if (_sessions && _sessions.loadSessions) await _sessions.loadSessions();
+  uiModule.showToast(mode === 'move' ? `Deleted ${name}; its chats are in Main` : `Deleted ${name}`);
+  return true;
 }
 
 /**
@@ -549,6 +595,6 @@ export function init(sessionApi) {
 
 export default {
   MEMORY_START_OPTIONS, settingsFor, describeSettings, knownProjectNames, refreshProjects,
-  chooseProjectSettings, createProject, editProject, chooseMemoryMove,
+  chooseProjectSettings, createProject, editProject, deleteProject, chooseMemoryMove,
   openProjectsWindow, openProjectHome, init,
 };

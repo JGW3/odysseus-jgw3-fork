@@ -2567,6 +2567,24 @@ function _sessionDeletionUrl(id) {
   return `${API_BASE}/api/session/${encodeURIComponent(id)}?delete_images=${deleteImages}`;
 }
 
+/** Delete several chats through the normal confirm (which also asks about
+ * their Gallery images). Resolves to false when the user cancels. */
+export async function deleteChats(ids, message) {
+  const list = [...new Set((ids || []).map(String))];
+  if (!list.length) return true;
+  if (!await _confirmSessionDeletion(list, message)) return false;
+  for (const id of list) {
+    try {
+      await fetch(_sessionDeletionUrl(id), { method: 'DELETE' });
+      _deselectCurrentSession(id);
+    } catch (err) {
+      console.error('Failed to delete session:', id, err);
+    }
+  }
+  await loadSessions();
+  return true;
+}
+
 export async function deleteCurrentSessionFromTopMenu() {
   const sid = currentSessionId;
   if (!sid) {
@@ -3862,6 +3880,7 @@ const sessionModule = {
   setSortMode,
   setProjectGroupSource,
   setNextChatProject,
+  deleteChats,
   moveToFolder,
   wireFolderDropTarget,
   deleteCurrentSessionFromTopMenu

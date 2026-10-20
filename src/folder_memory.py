@@ -139,6 +139,16 @@ def has_private_memory_projects(owner: Optional[str]) -> bool:
     return any(not policy.share for policy in all_policies(owner).values())
 
 
+def delete_policy(owner: Optional[str], folder: Any) -> None:
+    name = _norm_folder(folder)
+    prefs = _load_prefs(owner)
+    policies = dict(_policies(prefs))
+    if name in policies:
+        policies.pop(name)
+        prefs[PREFS_KEY] = policies
+        _save_prefs(owner, prefs)
+
+
 def rename_policy(owner: Optional[str], old: Any, new: Any) -> None:
     old_name, new_name = _norm_folder(old), _norm_folder(new)
     if not old_name or not new_name or old_name == new_name:

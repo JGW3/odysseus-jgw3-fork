@@ -738,7 +738,7 @@ from routes.memory.memory_routes import setup_memory_routes
 memory_router = setup_memory_routes(memory_manager, session_manager, memory_vector=memory_vector)
 app.include_router(memory_router)
 from routes.folder_routes import setup_folder_routes
-app.include_router(setup_folder_routes(memory_manager))
+app.include_router(setup_folder_routes(memory_manager, memory_vector=memory_vector))
 from routes.skills_routes import setup_skills_routes
 app.include_router(setup_skills_routes(skills_manager))
 

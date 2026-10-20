@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 import core.database as database
-from core.database import Base, Document, Session as DbSession
+from core.database import Base, Document, DocumentVersion, Session as DbSession
 from src import folder_documents as fd
 from src import folder_memory as fm
 
@@ -17,7 +17,7 @@ from src import folder_memory as fm
 @pytest.fixture
 def db(monkeypatch, tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'app.db'}")
-    Base.metadata.create_all(engine, tables=[DbSession.__table__, Document.__table__])
+    Base.metadata.create_all(engine, tables=[DbSession.__table__, Document.__table__, DocumentVersion.__table__])
     factory = sessionmaker(bind=engine)
     monkeypatch.setattr(database, "SessionLocal", factory)
     store = {}
@@ -129,3 +129,83 @@ def test_memories_from_a_projects_chats_are_filed_when_it_turns_private():
     assert entries[0]["folder"] == "Game"
     assert "folder" not in entries[1]
     assert entries[2]["folder"] == "Other"
+
+
+class _FakeMemory:
+    def __init__(self, entries):
+        self.entries = entries
+
+    def load(self, owner=None):
+        return [e for e in self.entries if owner is None or e.get("owner") == owner]
+
+    def load_all_for_update(self):
+        return [dict(e) for e in self.entries]
+
+    def save(self, entries):
+        self.entries = entries
+
+
+class _FakeVector:
+    healthy = True
+
+    def __init__(self):
+        self.removed = []
+
+    def remove(self, memory_id):
+        self.removed.append(memory_id)
+
+
+def _delete_client(monkeypatch, memory, vector):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routes import folder_routes
+    monkeypatch.setattr(folder_routes, "SessionLocal", database.SessionLocal)
+    monkeypatch.setattr(folder_routes, "effective_user", lambda request: "u")
+    app = FastAPI()
+    app.include_router(folder_routes.setup_folder_routes(memory, memory_vector=vector))
+    return TestClient(app)
+
+
+def _project_state(factory):
+    s = factory()
+    try:
+        chats = {c.id: c.folder for c in s.query(DbSession).all()}
+        docs = {d.id: d.folder for d in s.query(Document).all()}
+        return chats, docs
+    finally:
+        s.close()
+
+
+def test_deleting_a_project_and_moving_its_chats_to_main(db, monkeypatch):
+    fm.set_policy("u", "Game", receive="none", share=False, documents_private=True)
+    add_doc(db, "sheet", "game-chat", folder="Game")
+    memory = _FakeMemory([{"id": "m1", "owner": "u", "folder": "Game", "text": "a"},
+                          {"id": "m2", "owner": "u", "text": "b"}])
+    vector = _FakeVector()
+    client = _delete_client(monkeypatch, memory, vector)
+    res = client.delete("/api/folders/Game?mode=move")
+    assert res.status_code == 200 and res.json()["chats_moved"] == 1
+    chats, docs = _project_state(db)
+    assert chats["game-chat"] is None and docs["sheet"] is None
+    assert [e for e in memory.entries if e["id"] == "m1"][0].get("folder") is None
+    assert vector.removed == []
+    assert "Game" not in fm.all_policies("u")
+
+
+def test_deleting_a_project_and_everything_in_it(db, monkeypatch):
+    fm.set_policy("u", "Game", receive="none", share=False, documents_private=True)
+    add_doc(db, "sheet", "game-chat", folder="Game")
+    add_doc(db, "recipe", "main-chat")
+    memory = _FakeMemory([{"id": "m1", "owner": "u", "folder": "Game", "text": "a"},
+                          {"id": "m2", "owner": "u", "text": "b"},
+                          {"id": "m3", "owner": "other", "folder": "Game", "text": "c"}])
+    vector = _FakeVector()
+    client = _delete_client(monkeypatch, memory, vector)
+    assert client.get("/api/folders/Game/chat-ids").json()["chat_ids"] == ["game-chat"]
+    res = client.delete("/api/folders/Game?mode=everything")
+    assert res.status_code == 200
+    _, docs = _project_state(db)
+    assert "sheet" not in docs and "recipe" in docs
+    assert sorted(e["id"] for e in memory.entries) == ["m2", "m3"]   # another owner's memory is untouched
+    assert vector.removed == ["m1"]
+    assert client.delete("/api/folders/Game?mode=nope").status_code == 400

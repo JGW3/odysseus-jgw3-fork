@@ -4460,6 +4460,8 @@ function startOdysseusApp() {
 	    setProjectGroupSource: sessionModule.setProjectGroupSource,
 	    renderSessionList: sessionModule.renderSessionList,
 	    loadSessions: sessionModule.loadSessions,
+	    setNextChatProject: sessionModule.setNextChatProject,
+	    deleteChats: sessionModule.deleteChats,
 	  });
 
 	  // ── Mobile pull-to-refresh for the active chat ──

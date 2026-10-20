@@ -100,7 +100,7 @@ def _policy_dict(policy):
     }
 
 
-def setup_folder_routes(memory_manager: MemoryManager):
+def setup_folder_routes(memory_manager: MemoryManager, memory_vector=None):
     router = APIRouter(prefix="/api/folders", tags=["folders"])
 
     @router.get("")
@@ -265,6 +265,83 @@ def setup_folder_routes(memory_manager: MemoryManager):
             "memory": _policy_dict(policy), "documents_private": policy.documents_private,
             "chats": chat_rows, "memories": memories, "documents": doc_rows,
         }
+
+    @router.get("/{name}/chat-ids")
+    def project_chat_ids(request: Request, name: str):
+        """Every chat in the project, so the browser can delete them one by one
+        through the normal chat-delete path."""
+        return {"name": name.strip(), "chat_ids": sorted(_project_chat_ids(effective_user(request), name.strip()))}
+
+    @router.delete("/{name}")
+    def delete_folder(request: Request, name: str, mode: str = "move"):
+        """Delete a project.
+
+        ``mode=move``: its chats move to Main and its private memories and
+        documents join the shared pool. ``mode=everything``: its private
+        memories and documents are deleted (the browser deletes its chats
+        first, through the chat-delete path; any left are moved to Main).
+        """
+        user = effective_user(request)
+        folder = name.strip()
+        if not folder:
+            raise HTTPException(400, "A project name is required")
+        if mode not in ("move", "everything"):
+            raise HTTPException(400, "mode must be 'move' or 'everything'")
+        from core.database import Document
+        db = SessionLocal()
+        try:
+            chats = db.query(DbSession).filter(DbSession.folder == folder)
+            if user:
+                chats = chats.filter(DbSession.owner == user)
+            moved_chats = 0
+            for row in chats.all():
+                row.folder = None
+                moved_chats += 1
+            docs = db.query(Document).filter(Document.folder == folder)
+            if user:
+                docs = docs.filter(Document.owner == user)
+            documents = 0
+            for doc in docs.all():
+                documents += 1
+                if mode == "everything":
+                    db.delete(doc)
+                else:
+                    doc.folder = None
+            db.commit()
+        finally:
+            db.close()
+        memories = 0
+        try:
+            entries = memory_manager.load_all_for_update()
+        except MemoryStoreUnreadable as error:
+            logger.error("Memory store unreadable; project %s deleted without its memories: %s", folder, error)
+            entries = None
+        removed_ids = []
+        if entries is not None:
+            kept = []
+            for entry in entries:
+                mine = (not user or entry.get("owner") == user) and str(entry.get("folder") or "").strip() == folder
+                if not mine:
+                    kept.append(entry)
+                    continue
+                memories += 1
+                if mode == "move":
+                    entry.pop("folder", None)
+                    kept.append(entry)
+                else:
+                    removed_ids.append(entry.get("id"))
+            if memories:
+                memory_manager.save(kept)
+        # Deleted memories leave the search index too.
+        if memory_vector is not None and getattr(memory_vector, "healthy", False):
+            for memory_id in removed_ids:
+                try:
+                    memory_vector.remove(memory_id)
+                except Exception as error:
+                    logger.warning("Could not remove memory %s from the index: %s", memory_id, error)
+        folder_memory.delete_policy(user, folder)
+        return {"name": folder, "mode": mode, "chats_moved": moved_chats,
+                "memories": memories, "documents": documents}
 
     @router.get("/move-impact")
     def move_impact(request: Request, session_id: str, to: str = ""):
