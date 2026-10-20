@@ -515,10 +515,26 @@ body.bg-pattern-ascii-fireflies {
       flex: 0 0 auto;
     }
     #projects-section { min-height: 0; flex: 0 0 auto; }
+    /* Projects scrolls like Chats (see #session-list below). */
+    #projects-section #projects-list {
+      max-height: min(42vh, 420px);
+      flex: 0 0 auto;
+      overflow-y: auto;
+      overflow-x: hidden;
+      scrollbar-width: thin;
+      min-height: 0;
+    }
+    @media (max-width: 768px) {
+      #projects-section #projects-list {
+        max-height: min(34vh, 300px) !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+      }
+    }
     /* Keep a large chat history from pushing the rest of the sidebar below
        the fold. The chat rows scroll independently; the sections beneath
        them stay reachable in the main sidebar scroll area. */
-    :is(#sessions-section #session-list, #projects-section #projects-list) {
+    #sessions-section #session-list {
       max-height: min(42vh, 420px);
       flex: 0 0 auto;
       overflow-y: auto;
@@ -535,7 +551,7 @@ body.bg-pattern-ascii-fireflies {
         flex: 0 0 auto !important;
         overflow: visible !important;
       }
-      :is(#sessions-section #session-list, #projects-section #projects-list) {
+      #sessions-section #session-list {
         max-height: min(34vh, 300px) !important;
         flex: 0 0 auto !important;
         overflow-y: auto !important;
