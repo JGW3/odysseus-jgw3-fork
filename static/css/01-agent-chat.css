@@ -6466,10 +6466,21 @@ body.bg-pattern-ascii-fireflies {
     .project-start-list { margin: 0 0 4px 22px; display: flex; flex-direction: column; }
     .project-start-list[hidden] { display: none; }
     .project-start-option { padding: 3px 0; font-size: 0.85rem; }
+    /* Project headers read like the sidebar's other rows (same size as a
+       chat row), not like the old, larger folder headers. */
+    #projects-list .session-folder { margin: 0; }
+    #projects-list .project-group-header {
+      font-size: 13px; font-weight: 400; line-height: 16.9px;
+      padding: 3px 8px; min-height: 24px; box-sizing: border-box;
+      color: var(--fg);
+    }
+    #projects-list .project-group-header .folder-name { font-size: 0.75em; }
+    #projects-list .project-group-header .folder-toggle { font-size: 7px; opacity: 0.5; }
+    #projects-list .project-group-header .folder-count { font-size: 0.7em; }
+    #projects-list .project-new-item .grow { font-size: 0.75em; }
     /* Same height with or without a gear (buttons carry a min-height). */
-    .project-group-header { min-height: 28px; box-sizing: border-box; }
-    .project-group-header .project-gear-btn {
-      margin-left: 4px; width: 20px; height: 20px; min-height: 0; min-width: 0;
+    #projects-list .project-group-header .project-gear-btn {
+      margin-left: 4px; width: 18px; height: 18px; min-height: 0; min-width: 0; padding: 0;
     }
     #projects-list .project-group-empty { font-size: 11px; line-height: 1.4; padding: 2px 10px 6px 24px; opacity: 0.55; }
     .project-list-icon {
