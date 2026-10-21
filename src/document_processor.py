@@ -2,6 +2,7 @@
 """Document processing: PDF/OCR extraction, text file handling, image VL analysis, user content building."""
 
 import os
+import asyncio
 import logging
 import mimetypes
 import base64
@@ -11,6 +12,7 @@ import tempfile
 from typing import List, Dict, Any
 
 from src.llm_core import llm_call
+from src.constants import VISION_MAX_TOKENS, VISION_DESCRIBE_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -407,7 +409,7 @@ def _load_vl_settings() -> dict:
         return {}
 
 
-def _resolve_vl_model(configured: str, owner: str | None = None) -> tuple:
+def _resolve_vl_model(configured: str, owner: str | None = None, session_id: str | None = None) -> tuple:
     """Resolve the vision model to (url, model_id, headers).
 
     Uses admin-configured model if set, otherwise tries auto-detection
@@ -418,12 +420,76 @@ def _resolve_vl_model(configured: str, owner: str | None = None) -> tuple:
     if configured:
         return _resolve_model(configured, owner=owner)
 
-    # Auto-detect: try known vision-capable models in priority order
+    # Auto-detect: prefer the model actually loaded in the chat session this
+    # image came from, over the app-wide default. A user can have several
+    # sessions each on a different model; for a gallery image promoted from
+    # a chat upload (GalleryImage.session_id), the session it actually came
+    # from is a more specific, more likely answer than the global default.
+    # `session_id` is trusted only after confirming it belongs to `owner` —
+    # a caller passing an arbitrary id for someone else's session just
+    # silently gets no match here, not an error, since this is a
+    # best-effort auto-detect step, not an access check of its own.
+    try:
+        from src.chat_helpers import model_supports_vision
+        session_model = None
+        if session_id:
+            from core.database import SessionLocal, Session as DbSession
+            db = SessionLocal()
+            try:
+                sess_row = db.query(DbSession).filter(DbSession.id == session_id).first()
+                if sess_row and (not owner or sess_row.owner == owner):
+                    session_model = (sess_row.model or "").strip()
+            finally:
+                db.close()
+        if session_model:
+            url, model_id, headers = _resolve_model(session_model, owner=owner)
+            if model_supports_vision(model_id, url):
+                return url, model_id, headers
+    except (ValueError, Exception):
+        pass
+
+    # Auto-detect: no usable session model — fall back to the configured
+    # default chat model when it's actually vision-capable. Most
+    # self-hosted setups run a single multimodal daily-driver model under a
+    # name that won't appear in the generic hosted-model list below — that
+    # list is realistically only ever configured on instances that also
+    # have a hosted-provider endpoint, so on a local-only setup auto-detect
+    # would otherwise never resolve to anything even though a perfectly
+    # good vision model is already the one in everyday use.
+    try:
+        from src.settings import load_settings
+        from src.chat_helpers import model_supports_vision
+        default_model = (load_settings().get("default_model") or "").strip()
+        if default_model:
+            url, model_id, headers = _resolve_model(default_model, owner=owner)
+            if model_supports_vision(model_id, url):
+                return url, model_id, headers
+    except (ValueError, Exception):
+        pass
+
+    # Auto-detect: the default model isn't vision-capable (or isn't
+    # configured) — try known vision-capable models in priority order.
+    # Kept roughly in sync with the curated hosted-provider rosters in
+    # routes/model_routes.py (_PROVIDER_CURATED) and the local-model
+    # families _VISION_MODEL_KEYWORDS (src/chat_helpers.py) already
+    # recognizes by name, so a stock pull under one of those names still
+    # resolves even when it isn't the configured default.
     candidates = [
-        "gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini",
-        "claude-sonnet-4-5-20250929", "claude-opus-4-20250514",
-        "gemini-2.0-flash", "gemini-2.5-pro",
-        "llava", "pixtral", "qwen2-vl",
+        # hosted
+        "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4o", "gpt-4o-mini",
+        "gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini",
+        "claude-sonnet-4-5-20250929", "claude-opus-4-20250514", "claude-sonnet-4-20250514",
+        "gemini-3.1-pro-preview", "gemini-3-flash-preview",
+        "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash",
+        "grok-4",
+        "glm-4.6v", "glm-4.5v", "glm-5v-turbo",
+        # open / local (Ollama/llama.cpp stock tags). gemma4/gemma3 lead
+        # Ollama's own vision-model pull counts as of 2026 — checked
+        # against ollama.com/search?c=vision rather than assumed.
+        "gemma4", "gemma3", "qwen3-vl", "qwen2-vl", "llama3.2-vision", "llama4",
+        "llava", "pixtral", "minicpm-v",
+        "mistral-small3.2", "phi4",
+        "internvl", "cogvlm", "moondream", "bakllava",
     ]
     for candidate in candidates:
         try:
@@ -440,13 +506,13 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
     try:
         settings = _load_vl_settings()
         if not settings.get("vision_enabled", True):
-            return {"text": "[Vision is disabled — enable it in Settings → Vision]", "model": ""}
+            return {"text": "[Vision is disabled — enable it in Settings → AI Defaults → Vision]", "model": ""}
         vl_model = settings.get("vision_model", "")
 
         try:
             url, model_id, headers = _resolve_vl_model(vl_model, owner=owner)
         except ValueError:
-            return {"text": "[No vision model configured — set one in Settings → Vision]", "model": vl_model or ""}
+            return {"text": "[No vision model configured — set one in Settings → AI Defaults → Vision]", "model": vl_model or ""}
 
         with open(image_path, "rb") as f:
             img_data = base64.b64encode(f.read()).decode("utf-8")
@@ -459,12 +525,12 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": "Describe this image in detail"},
+                    {"type": "text", "text": VISION_DESCRIBE_PROMPT},
                     {"type": "image_url", "image_url": {"url": f"data:image/{img_format};base64,{img_data}"}},
                 ],
             }
         ]
-        # Vision-specific fallback chain (Settings → Vision → Fallbacks). A
+        # Vision-specific fallback chain (Settings → AI Defaults → Vision → Fallbacks). A
         # downed vision endpoint can fall through to the next configured model
         # — same shape as task/chat but its own list (`vision_model_fallbacks`).
         try:
@@ -476,7 +542,7 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
         last_err = None
         for i, (_url, _model, _headers) in enumerate([c for c in _vl_candidates if c and c[0] and c[1]]):
             try:
-                description = llm_call(_url, _model, vl_messages, headers=_headers, timeout=120)
+                description = llm_call(_url, _model, vl_messages, headers=_headers, timeout=300, max_tokens=VISION_MAX_TOKENS, temperature=0.2)
                 logger.info("VL analysis complete with model %s", _model)
                 return {"text": description, "model": _model}
             except Exception as e:
@@ -494,6 +560,56 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
 def analyze_image_with_vl(image_path: str, owner: str | None = None) -> str:
     """Analyze an image using the admin-configured Vision-Language model."""
     return analyze_image_with_vl_result(image_path, owner=owner).get("text", "")
+
+
+# Short, verb-first on purpose — an over-specified prompt makes thinking
+# models spend their whole budget verifying compliance instead of describing
+# the image (see VISION_DESCRIBE_PROMPT's history in the OCR feature).
+_MAIN_MODEL_CAPTION_PROMPT = (
+    "Describe this image in one or two sentences, suitable as a photo caption. "
+    "Report only what is visible in the image itself."
+)
+
+
+async def describe_image_for_caption(
+    image_path: str, url: str, model_id: str, headers: dict | None = None, mime: str | None = None,
+) -> str:
+    """Ask an already-resolved model/endpoint for a caption-style image description.
+
+    For multimodal main models, the model already saw the image as part of
+    the chat turn, but its reply answers whatever the user asked and is
+    rarely a usable caption. This fires one dedicated, description-only call
+    to the SAME model/endpoint the turn used (not the separate VL model —
+    see analyze_image_with_vl_result for that path) so a gallery caption
+    still gets produced.
+
+    ``mime`` is the caller's already-resolved upload MIME (e.g. from the
+    attachment manifest), used only as a fallback for an extensionless path
+    — same precedence as build_user_content's image-payload builder, so an
+    extensionless upload recorded as image/png doesn't get mislabeled jpeg.
+    """
+    def _read_and_encode() -> str:
+        with open(image_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    img_data = await asyncio.to_thread(_read_and_encode)
+    ext = os.path.splitext(image_path)[1].lower()
+    mime_map = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".gif": "gif", ".webp": "webp"}
+    img_format = mime_map.get(ext) or ((mime or "").split("/", 1)[1] if (mime or "").startswith("image/") else "jpeg")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _MAIN_MODEL_CAPTION_PROMPT},
+                {"type": "image_url", "image_url": {"url": f"data:image/{img_format};base64,{img_data}"}},
+            ],
+        }
+    ]
+    from src.llm_core import llm_call_async
+    # max_tokens is left uncapped (llm_call_async's own default), so a
+    # thinking model can legitimately take a while — same reasoning as the
+    # ai-tag route's own timeout (raised 60s -> 300s after live batch runs
+    # hit httpx.ReadTimeout at exactly the old cap).
+    return await llm_call_async(url, model_id, messages, headers=headers, timeout=300)
 
 
 def build_user_content(

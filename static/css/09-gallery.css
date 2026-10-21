@@ -601,7 +601,7 @@ body.gallery-selecting .gallery-dl-btn,
 .vision-editor-text:focus { border-color: var(--accent-primary, var(--red)); }
 .vision-editor-hint { font-size: 10.5px; opacity: 0.55; line-height: 1.4; }
 .vision-editor-actions {
-  display: flex; gap: 8px; justify-content: flex-end;
+  display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end;
   margin-top: 4px;
 }
 .vision-editor-btn {
@@ -1179,6 +1179,16 @@ body.gallery-selecting .gallery-dl-btn,
 .gallery-detail-prompt {
   white-space: pre-wrap;
   line-height: 1.4;
+}
+/* Plain-text link button for the OCR caption show more / show less toggle. */
+.gallery-caption-toggle-btn {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--red);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
 }
 .gallery-tag-input,
 .gallery-detail-name-input {
