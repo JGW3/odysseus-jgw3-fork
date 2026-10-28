@@ -419,15 +419,8 @@ def _resolve_vl_model(configured: str, owner: str | None = None, session_id: str
     if configured:
         return _resolve_model(configured, owner=owner)
 
-    # Auto-detect: prefer the model actually loaded in the chat session this
-    # image came from, over the app-wide default. A user can have several
-    # sessions each on a different model; for a gallery image promoted from
-    # a chat upload (GalleryImage.session_id), the session it actually came
-    # from is a more specific, more likely answer than the global default.
-    # `session_id` is trusted only after confirming it belongs to `owner` —
-    # a caller passing an arbitrary id for someone else's session just
-    # silently gets no match here, not an error, since this is a
-    # best-effort auto-detect step, not an access check of its own.
+    # Auto-detect: prefer the model of the chat the image came from (only if
+    # that session belongs to `owner`; otherwise this step just finds nothing).
     try:
         from src.chat_helpers import model_supports_vision
         session_model = None
@@ -447,14 +440,8 @@ def _resolve_vl_model(configured: str, owner: str | None = None, session_id: str
     except (ValueError, Exception):
         pass
 
-    # Auto-detect: no usable session model — fall back to the configured
-    # default chat model when it's actually vision-capable. Most
-    # self-hosted setups run a single multimodal daily-driver model under a
-    # name that won't appear in the generic hosted-model list below — that
-    # list is realistically only ever configured on instances that also
-    # have a hosted-provider endpoint, so on a local-only setup auto-detect
-    # would otherwise never resolve to anything even though a perfectly
-    # good vision model is already the one in everyday use.
+    # Then the default chat model, if vision-capable: local setups usually run
+    # one multimodal model whose name isn't in the hosted list below.
     try:
         from src.settings import load_settings
         from src.chat_helpers import model_supports_vision
@@ -466,13 +453,8 @@ def _resolve_vl_model(configured: str, owner: str | None = None, session_id: str
     except (ValueError, Exception):
         pass
 
-    # Auto-detect: the default model isn't vision-capable (or isn't
-    # configured) — try known vision-capable models in priority order.
-    # Kept roughly in sync with the curated hosted-provider rosters in
-    # routes/model_routes.py (_PROVIDER_CURATED) and the local-model
-    # families _VISION_MODEL_KEYWORDS (src/chat_helpers.py) already
-    # recognizes by name, so a stock pull under one of those names still
-    # resolves even when it isn't the configured default.
+    # Then known vision models in priority order (roughly in sync with
+    # _PROVIDER_CURATED in routes/model_routes.py and _VISION_MODEL_KEYWORDS).
     candidates = [
         # hosted
         "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4o", "gpt-4o-mini",
@@ -482,9 +464,7 @@ def _resolve_vl_model(configured: str, owner: str | None = None, session_id: str
         "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash",
         "grok-4",
         "glm-4.6v", "glm-4.5v", "glm-5v-turbo",
-        # open / local (Ollama/llama.cpp stock tags). gemma4/gemma3 lead
-        # Ollama's own vision-model pull counts as of 2026 — checked
-        # against ollama.com/search?c=vision rather than assumed.
+        # open / local (Ollama/llama.cpp stock tags)
         "gemma4", "gemma3", "qwen3-vl", "qwen2-vl", "llama3.2-vision", "llama4",
         "llava", "pixtral", "minicpm-v",
         "mistral-small3.2", "phi4",

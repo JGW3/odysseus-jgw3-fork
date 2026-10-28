@@ -238,22 +238,12 @@ async def test_call_vision_model_all_candidates_fail_raises_generic_error(tmp_pa
 # Timeout middleware exemption — ai-tag needs the same 300s exemption ocr has
 # ---------------------------------------------------------------------------
 
-def test_timeout_exempt_pattern_covers_ocr_and_ai_tag():
-    # app.py has module-level side effects at import time, so — matching the
-    # convention in test_memory_audit_timeout.py — check the source text
-    # rather than importing the module. The pattern itself is exercised
-    # directly against a real compiled regex built from the same source
-    # literal, so this isn't just a substring check.
-    import re as _re
+def test_timeout_exemption_covers_ocr_and_ai_tag():
+    # app.py has import-time side effects (see test_memory_audit_timeout.py),
+    # so check the source text.
     from pathlib import Path
 
     source = Path("app.py").read_text()
-    start = source.index("_TIMEOUT_EXEMPT_PATTERNS =")
-    end = source.index("\n)\n", start)
-    block = source[start:end]
-    assert '"^/api/gallery/[^/]+/(ocr|ai-tag)$"' in block
-
-    pattern = _re.compile(r"^/api/gallery/[^/]+/(ocr|ai-tag)$")
-    assert pattern.match("/api/gallery/abc123/ocr")
-    assert pattern.match("/api/gallery/abc123/ai-tag")
-    assert not pattern.match("/api/gallery/abc123/other")
+    start = source.index("class _RequestTimeoutMiddleware")
+    block = source[start:source.index("wait_for", start)]
+    assert 'path.startswith("/api/gallery/") and path.endswith(("/ocr", "/ai-tag"))' in block

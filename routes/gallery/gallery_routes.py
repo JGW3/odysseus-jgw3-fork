@@ -110,19 +110,8 @@ async def _resolve_vision_candidates(
     model_override: str, owner: Optional[str], session_id: Optional[str] = None,
 ) -> list:
     """Resolve the vision model chain (override or Settings → AI Defaults →
-    Vision, plus its configured fallbacks) off the event loop.
-
-    ``session_id`` is the chat session a gallery image was originally
-    uploaded/captioned from (GalleryImage.session_id), when known — passed
-    through so auto-detect (no vision_model configured) can prefer that
-    session's own model over the app-wide default; see _resolve_vl_model.
-
-    Model discovery for OpenAI-compatible/native-Ollama endpoints makes a
-    blocking HTTP probe (`_resolve_model` in `src/ai_interaction.py`); doing
-    that inline in this async route stalls every other in-flight request for
-    up to its timeout, which shows up as avoidable per-image latency when
-    OCR/tagging is run over a batch. `asyncio.to_thread` moves it off-loop.
-
+    Vision, plus fallbacks) in a thread: model discovery makes blocking HTTP
+    probes. ``session_id`` lets auto-detect prefer the image's chat model.
     Raises a VisionRequestError subclass on any resolution failure.
     """
     from src.document_processor import _load_vl_settings, _resolve_vl_model
@@ -162,14 +151,8 @@ async def _call_vision_model(
     temperature: float = 0.2,
     session_id: Optional[str] = None,
 ) -> tuple:
-    """Describe/tag an image through the app's provider-aware LLM transport.
-
-    Tries the configured vision model, then its configured fallbacks in
-    order (Settings → AI Defaults → Vision → Fallbacks) via `llm_call_async`
-    — the same transport chat and document vision calls use, so this works
-    for every provider shape (OpenAI-compatible, Anthropic, native Ollama,
-    ChatGPT Subscription) instead of the two hand-built request shapes this
-    route used to speak, which made it fail outright against the other two.
+    """Describe/tag an image via `llm_call_async` (every provider shape),
+    trying the vision model and then its fallbacks in order.
 
     Returns (text, model_name_that_answered). Raises a VisionRequestError
     subclass for an unsupported file, or if every candidate failed or

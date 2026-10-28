@@ -2430,7 +2430,6 @@ export function openGallery() {
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">
                   <div id="gallery-ocr-status" style="font-size:10px;opacity:0.5;"></div>
-                  <button id="gallery-ocr-cancel" class="gallery-select-btn" style="font-size:10px;padding:1px 6px;">Cancel</button>
                 </div>
               </div>
               <div class="memory-toolbar" style="display:flex;flex-direction:row;gap:6px;align-items:center;justify-content:space-between;flex-wrap:wrap;margin-top:12px;">
@@ -2858,15 +2857,12 @@ export function openGallery() {
       const bar = document.getElementById('gallery-ocr-bar');
       const progEl = document.getElementById('gallery-ocr-progress');
       const statusEl = document.getElementById('gallery-ocr-status');
-      const cancelBtn = document.getElementById('gallery-ocr-cancel');
       bar.style.display = '';
       progEl.style.width = '0%';
       _ocring = true;
       _ocrCancelRequested = false;
       ocrAllBtn.classList.add('active', 'gallery-tag-cancelling');
       ocrAllBtn.textContent = 'Cancel';
-      if (cancelBtn) cancelBtn.style.display = 'none';
-      if (cancelBtn) cancelBtn.onclick = () => { _ocrCancelRequested = true; statusEl.textContent = 'Cancelling...'; };
 
       let done = 0, failed = 0;
       for (const id of listRes.image_ids) {
@@ -2891,7 +2887,6 @@ export function openGallery() {
       ocrAllBtn.disabled = false;
       ocrAllBtn.classList.remove('active', 'gallery-tag-cancelling');
       ocrAllBtn.innerHTML = _ocrAllOrigHTML;
-      if (cancelBtn) cancelBtn.style.display = '';
       setTimeout(() => { bar.style.display = 'none'; }, 3000);
       await _fetchLibrary(false);
       if (uiModule) uiModule.showToast(`Described ${done - failed} photo${(done - failed) !== 1 ? 's' : ''}`);
