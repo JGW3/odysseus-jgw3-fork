@@ -64,10 +64,10 @@ def test_styled_confirm_ok_and_alternate_labels_shift_without_moving_buttons():
     # same label nudge as Cancel instead, and no rule moves a footer button.
     css = app_css()
 
-    assert "setLabel(okBtn, 'styled-confirm-btn-label'" in _UI
-    assert "setLabel(altBtn, 'styled-confirm-btn-label'" in _UI
+    assert "okBtn.replaceChildren(btnLabel(" in _UI
+    assert "altBtn.replaceChildren(btnLabel(" in _UI
     rule_start = css.index("#styled-confirm-ok .styled-confirm-btn-label")
-    rule = css[rule_start:rule_start + 160]
+    rule = css[rule_start:css.index("}", rule_start)]
     assert "#styled-confirm-alt .styled-confirm-btn-label" in rule
     assert "position:relative;" in rule and "top:2px;" in rule
     for selector in ("#styled-confirm-ok {", "#styled-confirm-alt {", "#styled-confirm-cancel {"):
