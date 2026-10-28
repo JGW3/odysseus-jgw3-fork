@@ -95,7 +95,7 @@ const PRECACHE = [
   '/static/js/theme.js?v=20260911organsrain1',
   '/static/js/censor.js',
   '/static/js/settings.js?v=20260912writingstyle3',
-  '/static/js/admin.js?v=20261008confirmwrap1',
+  '/static/js/admin.js?v=20260929csssplit',
   '/static/js/chatgptSubscriptionUsage.js',
   '/static/js/init.js?v=20260829chatstyle12',
   '/static/js/slashCommands.js?v=20260921chatgptusage1',
