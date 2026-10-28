@@ -7022,16 +7022,11 @@ import { invalidateSettings } from './appConfig.js';
         // chat keeps the original message and everything after it.
         bodyEl.innerHTML = originalHTML;
         try {
-          await _forkSessionAt(msgIndex, userMsgElement.dataset.dbId || '');
+          await _forkAndSend(msgIndex, userMsgElement.dataset.dbId || '', newText);
         } catch (err) {
           console.error('Fork failed:', err);
           if (uiModule) uiModule.showError('Fork failed: ' + err.message);
-          return;
         }
-        const forkInput = uiModule.el('message');
-        forkInput.value = newText;
-        const forkSubmit = document.querySelector('.send-btn');
-        if (forkSubmit) forkSubmit.click();
         return;
       }
 
@@ -7076,14 +7071,9 @@ import { invalidateSettings } from './appConfig.js';
     });
   }
 
-  // Regenerate, resend and edit all permanently delete everything after the
-  // point clicked via POST /api/session/{id}/truncate — a real, unrecoverable
-  // server-side delete, not just a UI change. Acting on the most recent
-  // exchange (nothing exists after it) is the everyday case and shouldn't
-  // need a prompt; `extraCount` is 0 there. Anything earlier does: none of
-  // those buttons says it also erases the rest of the conversation. The
-  // prompt also offers to fork instead, which leaves this chat untouched and
-  // replays the action in a new chat branched at this point.
+  // Regenerate, resend and edit permanently delete (server-side truncate)
+  // everything after the point clicked. Ask first unless nothing comes after
+  // it (extraCount 0), offering a fork that leaves this chat untouched.
   // Resolves to 'proceed', 'fork', or null (cancelled).
   const _TRUNCATE_ACTIONS = {
     regenerate: { lead: 'Regenerating here', confirmText: 'Delete and regenerate' },
@@ -7114,8 +7104,8 @@ import { invalidateSettings } from './appConfig.js';
     const res = await fetch(`${API_BASE}/api/session/${sessionId}/fork`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(beforeMsgId ? { before_msg_id: beforeMsgId, keep_count: keepCount }
-        : throughMsgId ? { through_msg_id: throughMsgId, keep_count: keepCount } : { keep_count: keepCount }),
+      body: JSON.stringify({ keep_count: keepCount,
+        ...(beforeMsgId ? { before_msg_id: beforeMsgId } : throughMsgId ? { through_msg_id: throughMsgId } : {}) }),
     });
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
@@ -7123,6 +7113,15 @@ import { invalidateSettings } from './appConfig.js';
     await sessionModule.selectSession(data.id);
     if (uiModule) uiModule.showToast(`Forked → ${data.name}`);
     return data.id;
+  }
+
+  // Fork before a user message and send `text` there; this chat is untouched.
+  // `attachments` (if given) are re-sent only once the fork has succeeded.
+  async function _forkAndSend(keepCount, beforeMsgId, text, attachments) {
+    await _forkSessionAt(keepCount, beforeMsgId);
+    if (attachments !== undefined) _pendingRegenAttachments = attachments;
+    uiModule.el('message').value = text;
+    document.querySelector('.send-btn')?.click();
   }
 
   /**
@@ -7189,12 +7188,7 @@ import { invalidateSettings } from './appConfig.js';
         if (choice === 'fork') {
           // Branch just before this user turn and send it again there; this
           // chat keeps every message.
-          await _forkSessionAt(msgIndex, userMsgElement.dataset.dbId || '');
-          _pendingRegenAttachments = _ids;
-          const forkInput = uiModule.el('message');
-          forkInput.value = text;
-          const forkSubmit = document.querySelector('.send-btn');
-          if (forkSubmit) forkSubmit.click();
+          await _forkAndSend(msgIndex, userMsgElement.dataset.dbId || '', text, _ids);
           return;
         }
         // Resend/regenerate trims history to this point before resubmitting so
@@ -7316,17 +7310,12 @@ import { invalidateSettings } from './appConfig.js';
       // chat gets a fresh reply to the same message; this chat keeps every
       // message. No variants or hidden bubble: the fork starts without them.
       try {
-        await _forkSessionAt(userIndex, (userMsgEl && userMsgEl.dataset.dbId) || '');
+        await _forkAndSend(userIndex, (userMsgEl && userMsgEl.dataset.dbId) || '', userText);
       } catch (err) {
         _pendingRegenAttachments = null;
         console.error('Fork failed:', err);
         if (uiModule) uiModule.showError('Fork failed: ' + err.message);
-        return;
       }
-      const forkInput = uiModule.el('message');
-      forkInput.value = userText;
-      const forkSubmit = document.querySelector('.send-btn');
-      if (forkSubmit) forkSubmit.click();
       return;
     }
 
