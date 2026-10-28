@@ -720,17 +720,10 @@ async def _fetch_result_image_b64(url: str) -> Optional[str]:
 
 
 def _extract_ai_tag_response_text(data: dict, provider: str) -> str:
-    """Pull the visible tag text out of a vision-model chat-completion response.
+    """Visible tag text from a vision reply, with thinking markup stripped.
 
-    Anthropic returns content[0].text. OpenAI-compatible providers return
-    choices[0].message.content — but a thinking-capable model can come back
-    with an empty content and the real answer only in reasoning_content, or
-    as Mistral's structured content list. Mirrors the canonical extraction
-    in llm_call/llm_call_async (src/llm_core.py) rather than a bare
-    content-only read: a bare read is exactly what let a thinking model
-    silently commit ai_tags="" as a reported success (caught in review on
-    PR #5965). Thinking markup is stripped before the caller splits on
-    commas, since Gemma/Qwen wrapper tokens otherwise land in the tag list.
+    Like llm_core's extraction (reasoning_content fallback, Mistral structured
+    content), except a Mistral thinking block is dropped rather than joined on.
     """
     if provider == "anthropic":
         content = (data.get("content") or [{}])[0].get("text", "")
@@ -740,9 +733,6 @@ def _extract_ai_tag_response_text(data: dict, provider: str) -> str:
         if isinstance(raw_content, list):
             from src.llm_core import _normalize_mistral_content
             text_part, thinking_part = _normalize_mistral_content(raw_content)
-            # Tags come from the visible answer only. llm_core joins a thinking
-            # block onto the text untagged, which strip_think cannot separate,
-            # so reasoning words would land in the tag list.
             content = (text_part or "") if thinking_part else (text_part or msg.get("reasoning_content") or "")
         else:
             content = raw_content or msg.get("reasoning_content") or ""
