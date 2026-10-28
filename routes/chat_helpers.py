@@ -1822,36 +1822,15 @@ async def _caption_multimodal_image_attachments(
     attachment_meta: list, endpoint_url: str, model: str, headers: dict | None,
     owner: str | None, upload_handler,
 ) -> None:
-    """Caption freshly-attached images when the main model is multimodal.
+    """Caption images the main (multimodal) model saw, via one describe-only
+    call to the route that answered (callers pass None when it can't be
+    confirmed). attachment_meta must already exclude captioned images.
 
-    The main model already saw these images as part of its own reply, but
-    that reply answers whatever the user asked, not a usable caption — so
-    this fires one dedicated describe-only call per image (via
-    describe_image_for_caption) to the model/endpoint the caller has
-    confirmed actually answered this turn (see run_post_response_tasks —
-    callers pass None for endpoint_url/model when that cannot be confirmed,
-    e.g. explicit-fallback routing switched candidates, so this never
-    guesses), then syncs the result the same way the text-only VL path
-    does: written to the attachment's own vision cache (so the chat
-    "Caption" button and any resend pick it up) and to the gallery caption.
-
-    Callers must pre-filter attachment_meta to image attachments that don't
-    already carry a "vision" description (set when the text-only VL path
-    ran or a user correction exists) — this only fills the gap left by the
-    multimodal path, it never overwrites an existing one.
-
-    Attachment metadata (id/mime) is read from the caller's already-resolved
-    manifest, but the file *path* is re-resolved here via an owner-checked
-    upload_handler.resolve_upload() call rather than trusting a path carried
-    in from an earlier snapshot — the same owner-check every other file read
-    in this request path goes through.
-
-    The written cache file gets a sidecar ``.autogen`` marker distinguishing
-    it from a genuine user correction (written by PUT /api/upload/{id}/vision)
-    — see _sync_upload_vision_to_gallery's caller in chat_handler.py for why
-    that provenance distinction matters: an unattended, unreviewed model
-    output should never be injected into a later prompt with the same
-    "treat as authoritative" instruction a real user correction gets.
+    The path is re-resolved through the owner-checked upload_handler. Results
+    go to the attachment's vision cache and the gallery caption, with a
+    ``.autogen`` marker so a later turn treats them as unverified context,
+    never as an authoritative user correction. An existing cache without the
+    marker (a user correction) is never overwritten.
     """
     if not endpoint_url or not model or not attachment_meta or not upload_handler:
         return
@@ -1922,9 +1901,7 @@ def run_post_response_tasks(
     persona_memory_schema: str = "general",
     attachment_meta: list | None = None,
     caption_images_sent: bool = False,
-    caption_endpoint_url: str | None = None,
-    caption_model: str | None = None,
-    caption_headers: dict | None = None,
+    caption_route: tuple | None = None,
     upload_handler=None,
 ):
     """Fire background tasks after a completed response: memory extraction, webhooks, auto-name, skill extraction.
@@ -1943,26 +1920,13 @@ def run_post_response_tasks(
     """
     _extraction_jobs: list = []
 
-    # Multimodal-model image captioning — fills the gallery-caption gap for
-    # turns where the main model saw the image directly (no separate VL
-    # call, so nothing captioned it). Only images without a "vision" entry
-    # already qualify; the text-only VL path and user corrections both set
-    # that, so this never overwrites either. Read from attachment_meta (the
-    # metadata preprocess_message actually mutated this turn), never from a
-    # freshly-rebuilt manifest — a fresh resolve has no way to know whether
-    # this turn's processing already found/generated a description, so it
-    # would treat an already-captioned image as fresh and overwrite it
-    # (including a user's own manual correction).
-    #
-    # caption_endpoint_url/model are the caller's confirmed *answering*
-    # route for this turn (None when that cannot be confirmed, e.g.
-    # explicit-fallback routing switched candidates) — never sess.model
-    # directly, since sess.model can be the originally-requested model while
-    # a different one actually produced the response and saw the image.
-    #
-    # caption_images_sent is whether this turn's request actually carried the
-    # image (PreprocessedMessage.images_sent_to_model). A text-only or
-    # vision-disabled turn strips it, so captioning must not send it either.
+    # Caption images the main model saw directly (no VL call captioned them).
+    # attachment_meta is this turn's preprocessed metadata, so images that
+    # already have a "vision" entry (VL path or a user correction) are skipped.
+    # caption_route is the confirmed (endpoint_url, model, headers) that
+    # answered, or None; caption_images_sent is False when a text-only or
+    # vision-disabled turn stripped the image, so captioning must not send it.
+    caption_endpoint_url, caption_model, caption_headers = caption_route or (None, None, None)
     if (
         allow_background_extraction and not incognito and not compare_mode
         and caption_images_sent

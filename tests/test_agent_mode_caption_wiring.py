@@ -46,11 +46,8 @@ def test_agent_mode_fallback_handler_updates_round_candidate_index():
 
 def test_agent_mode_passes_caption_params_from_round_one_candidate():
     block = _agent_mode_block()
-    assert "_r1_candidate_index = _agent_round_candidate_index.get(1, 0)" in block
     assert "attachment_meta=ctx.preprocessed.attachment_meta" in block
-    assert "caption_endpoint_url=_agent_cand[0] if _agent_cand else None" in block
-    assert "caption_model=_agent_cand[1] if _agent_cand else None" in block
-    assert "caption_headers=_agent_cand[2] if _agent_cand else None" in block
+    assert "caption_route=_candidate_at(_foreground_candidates, _agent_round_candidate_index.get(1, 0))" in block
     assert "upload_handler=upload_handler" in block
 
 

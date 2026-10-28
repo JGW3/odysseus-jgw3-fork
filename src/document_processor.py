@@ -498,9 +498,8 @@ def analyze_image_with_vl(image_path: str, owner: str | None = None) -> str:
     return analyze_image_with_vl_result(image_path, owner=owner).get("text", "")
 
 
-# Short, verb-first on purpose — an over-specified prompt makes thinking
-# models spend their whole budget verifying compliance instead of describing
-# the image (see VISION_DESCRIBE_PROMPT's history in the OCR feature).
+# Short and verb-first: an over-specified prompt makes thinking models spend
+# their budget checking compliance instead of describing the image.
 _MAIN_MODEL_CAPTION_PROMPT = (
     "Describe this image in one or two sentences, suitable as a photo caption. "
     "Report only what is visible in the image itself."
@@ -510,41 +509,19 @@ _MAIN_MODEL_CAPTION_PROMPT = (
 async def describe_image_for_caption(
     image_path: str, url: str, model_id: str, headers: dict | None = None, mime: str | None = None,
 ) -> str:
-    """Ask an already-resolved model/endpoint for a caption-style image description.
-
-    For multimodal main models, the model already saw the image as part of
-    the chat turn, but its reply answers whatever the user asked and is
-    rarely a usable caption. This fires one dedicated, description-only call
-    to the SAME model/endpoint the turn used (not the separate VL model —
-    see analyze_image_with_vl_result for that path) so a gallery caption
-    still gets produced.
-
-    ``mime`` is the caller's already-resolved upload MIME (e.g. from the
-    attachment manifest), used only as a fallback for an extensionless path
-    — same precedence as build_user_content's image-payload builder, so an
-    extensionless upload recorded as image/png doesn't get mislabeled jpeg.
+    """One caption-only call to the model/endpoint that answered the chat turn
+    (its reply answers the user, not a caption). ``mime`` is the upload's
+    resolved MIME, used for an extensionless path as in build_user_content.
     """
-    def _read_and_encode() -> str:
-        with open(image_path, "rb") as f:
-            return base64.b64encode(f.read()).decode("utf-8")
-    img_data = await asyncio.to_thread(_read_and_encode)
     ext = os.path.splitext(image_path)[1].lower()
-    mime_map = {".jpg": "jpeg", ".jpeg": "jpeg", ".png": "png", ".gif": "gif", ".webp": "webp"}
-    img_format = mime_map.get(ext) or ((mime or "").split("/", 1)[1] if (mime or "").startswith("image/") else "jpeg")
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": _MAIN_MODEL_CAPTION_PROMPT},
-                {"type": "image_url", "image_url": {"url": f"data:image/{img_format};base64,{img_data}"}},
-            ],
-        }
-    ]
+    fallback_format = ext[1:] or (mime.split("/", 1)[1] if (mime or "").startswith("image/") else "jpeg")
+    data_url, _ = await asyncio.to_thread(encode_image_data_url, image_path, fallback_format)
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": _MAIN_MODEL_CAPTION_PROMPT},
+        {"type": "image_url", "image_url": {"url": data_url}},
+    ]}]
     from src.llm_core import llm_call_async
-    # max_tokens is left uncapped (llm_call_async's own default), so a
-    # thinking model can legitimately take a while — same reasoning as the
-    # ai-tag route's own timeout (raised 60s -> 300s after live batch runs
-    # hit httpx.ReadTimeout at exactly the old cap).
+    # No max_tokens cap, and a 300s timeout: thinking models can take a while.
     return await llm_call_async(url, model_id, messages, headers=headers, timeout=300)
 
 

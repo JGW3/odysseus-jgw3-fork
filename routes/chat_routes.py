@@ -2232,6 +2232,11 @@ def _resolve_prompt_thinking_mode(explicit_mode, preset_id, preset_manager):
     return None
 
 
+def _candidate_at(candidates, index):
+    """The (endpoint_url, model, headers) candidate at index, or None."""
+    return candidates[index] if 0 <= index < len(candidates) else None
+
+
 def setup_chat_routes(
     session_manager,
     chat_handler,
@@ -2447,13 +2452,8 @@ def setup_chat_routes(
         session_manager.save_sessions()
 
         # Background tasks (memory, webhook, auto-name)
-        # actual_candidate is the confirmed (endpoint_url, model, headers)
-        # that answered this turn — not necessarily requested_route/sess.model
-        # if explicit-fallback routing switched candidates. The same request
-        # content (image included, when main_is_vision was true) is sent to
-        # every fallback candidate in turn, so whichever one actually
-        # answered is the one that actually saw the image.
-        _caption_url, _caption_model, _caption_headers = actual_candidate
+        # Caption with the candidate that answered (and so saw the image), not
+        # sess.model: explicit-fallback routing can switch candidates.
         run_post_response_tasks(
             sess, session_manager, session, message, reply, None,
             ctx.uprefs, memory_manager, memory_vector, webhook_manager,
@@ -2462,9 +2462,7 @@ def setup_chat_routes(
             allow_background_extraction=not tool_policy.block_all_tool_calls,
             attachment_meta=ctx.preprocessed.attachment_meta,
             caption_images_sent=bool(ctx.preprocessed.attachment_meta) and ctx.preprocessed.images_sent_to_model,
-            caption_endpoint_url=_caption_url,
-            caption_model=_caption_model,
-            caption_headers=_caption_headers,
+            caption_route=actual_candidate,
             upload_handler=upload_handler,
         )
 
@@ -4576,15 +4574,6 @@ def setup_chat_routes(
                                 )
                                 if _saved_id:
                                     yield f'data: {json.dumps({"type": "message_saved", "id": _saved_id})}\n\n'
-                                # See the non-stream endpoint for why this uses
-                                # the confirmed answering candidate rather than
-                                # sess.model — explicit-fallback routing can
-                                # switch which candidate actually answered.
-                                _cand = (
-                                    _foreground_candidates[_actual_candidate_index]
-                                    if 0 <= _actual_candidate_index < len(_foreground_candidates)
-                                    else None
-                                )
                                 run_post_response_tasks(
                                     sess, session_manager, session, message, _response_to_save,
                                     _metrics_to_save, ctx.uprefs, memory_manager, memory_vector, webhook_manager,
@@ -4598,9 +4587,7 @@ def setup_chat_routes(
                                     ),
                                     attachment_meta=ctx.preprocessed.attachment_meta,
                                     caption_images_sent=bool(ctx.preprocessed.attachment_meta) and ctx.preprocessed.images_sent_to_model,
-                                    caption_endpoint_url=_cand[0] if _cand else None,
-                                    caption_model=_cand[1] if _cand else None,
-                                    caption_headers=_cand[2] if _cand else None,
+                                    caption_route=_candidate_at(_foreground_candidates, _actual_candidate_index),
                                     upload_handler=upload_handler,
                                 )
                             _stream_set(session, status="done")
@@ -4639,13 +4626,8 @@ def setup_chat_routes(
                 _agent_round_endpoint_ids = {1: _agent_actual_endpoint_id}
                 _agent_round_endpoint_labels = {1: _agent_actual_endpoint_label}
                 _terminal_saved = False
-                # Round 1 is the round the image (if any) was actually sent
-                # in — the same request content every candidate in the
-                # fallback chain gets, so whichever candidate answered round
-                # 1 is the confirmed model that saw it. Seeded to the primary
-                # candidate (index 0) and only moves if round 1 itself
-                # failed over to a fallback. Used below to caption images
-                # after an agent-mode turn, the same way chat-mode does.
+                # The image is only sent in round 1, so the candidate that
+                # answered round 1 saw it; captioning below uses that one.
                 _agent_round_candidate_index = {1: 0}
                 try:
                     from src.settings import get_setting
@@ -5015,21 +4997,6 @@ def setup_chat_routes(
                                 )
                                 if _saved_id:
                                     yield f'data: {json.dumps(_render_state.message_saved(_saved_id))}\n\n'
-                                # Agent mode: caption off round 1's confirmed
-                                # answering candidate, not sess.model. Round 1
-                                # is the round the image (if any) was actually
-                                # sent in, so it's the one round where "which
-                                # candidate saw the image" is unambiguous even
-                                # though later rounds can fall over to a
-                                # different model mid-loop — that ambiguity is
-                                # exactly why this used to skip captioning
-                                # entirely for agent mode.
-                                _r1_candidate_index = _agent_round_candidate_index.get(1, 0)
-                                _agent_cand = (
-                                    _foreground_candidates[_r1_candidate_index]
-                                    if 0 <= _r1_candidate_index < len(_foreground_candidates)
-                                    else None
-                                )
                                 run_post_response_tasks(
                                     sess, session_manager, session, message, _response_to_save,
                                     _metrics_to_save, ctx.uprefs, memory_manager, memory_vector, webhook_manager,
@@ -5050,9 +5017,7 @@ def setup_chat_routes(
                                     ),
                                     attachment_meta=ctx.preprocessed.attachment_meta,
                                     caption_images_sent=bool(ctx.preprocessed.attachment_meta) and ctx.preprocessed.images_sent_to_model,
-                                    caption_endpoint_url=_agent_cand[0] if _agent_cand else None,
-                                    caption_model=_agent_cand[1] if _agent_cand else None,
-                                    caption_headers=_agent_cand[2] if _agent_cand else None,
+                                    caption_route=_candidate_at(_foreground_candidates, _agent_round_candidate_index.get(1, 0)),
                                     upload_handler=upload_handler,
                                 )
                             _stream_set(session, status="done")

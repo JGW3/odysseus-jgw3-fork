@@ -61,10 +61,8 @@ async def test_caption_job_noop_without_endpoint_or_model(tmp_path):
 
 
 def test_run_post_response_tasks_skips_captioning_without_confirmed_route(monkeypatch):
-    """caption_endpoint_url/caption_model default to None — the scheduling
-    block must not queue an image-caption job when the caller can't confirm
-    a single answering route (mirrors the agent-mode call site, which
-    deliberately never passes these)."""
+    """caption_route defaults to None: no image-caption job is queued when the
+    caller can't confirm a single answering route."""
     from types import SimpleNamespace
     sess = SimpleNamespace(
         endpoint_url="http://x", model="m", headers={}, history=[], name="Test Session",
@@ -84,9 +82,8 @@ def test_run_post_response_tasks_skips_captioning_without_confirmed_route(monkey
         last_metrics=None, uprefs={}, memory_manager=None, memory_vector=None, webhook_manager=None,
         allow_background_extraction=True,
         attachment_meta=[{"id": "att1", "mime": "image/png"}],
-        caption_endpoint_url=None,  # not confirmed
+        caption_route=None,  # not confirmed
         caption_images_sent=True,
-        caption_model="m",
         upload_handler=object(),
     )
     assert queued == []
@@ -109,8 +106,7 @@ def test_run_post_response_tasks_skips_already_captioned_image(monkeypatch):
         allow_background_extraction=True,
         attachment_meta=[{"id": "att1", "mime": "image/png", "vision": "already captioned"}],
         caption_images_sent=True,
-        caption_endpoint_url="http://x",
-        caption_model="m",
+        caption_route=("http://x", "m", {}),
         upload_handler=object(),
     )
     # No job queued at all — the (mocked) list of image attachments should
@@ -186,8 +182,7 @@ def _schedule(monkeypatch, **overrides):
     kwargs = dict(
         allow_background_extraction=True,
         attachment_meta=[{"id": "att1", "mime": "image/png"}],
-        caption_endpoint_url="http://x",
-        caption_model="m",
+        caption_route=("http://x", "m", {}),
         upload_handler=object(),
     )
     kwargs.update(overrides)
