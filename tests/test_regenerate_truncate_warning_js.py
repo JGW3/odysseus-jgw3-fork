@@ -412,6 +412,15 @@ def test_edit_fork_choice_forks_before_user_turn_and_sends_edit():
     _assert_forked_instead(_run_node(script), keep_count=2, sent_text="edited question")
 
 
+def test_fork_choices_carry_the_user_message_attachments():
+    # The harness can't drive a real send, so check the hand-off in source:
+    # resend and regenerate both pass their collected file ids to the fork.
+    chat = (_JS_DIR / "chat.js").read_text(encoding="utf-8")
+    assert "if (attachments !== undefined) _pendingRegenAttachments = attachments;" in chat
+    assert "await _forkAndSend(msgIndex, userMsgElement.dataset.dbId || '', text, _ids);" in chat
+    assert "await _forkAndSend(userIndex, (userMsgEl && userMsgEl.dataset.dbId) || '', userText, _regenIds);" in chat
+
+
 # ---------------------------------------------------------------------------
 # Cutting by message id
 # ---------------------------------------------------------------------------

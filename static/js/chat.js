@@ -7310,7 +7310,7 @@ import { invalidateSettings } from './appConfig.js';
       // chat gets a fresh reply to the same message; this chat keeps every
       // message. No variants or hidden bubble: the fork starts without them.
       try {
-        await _forkAndSend(userIndex, (userMsgEl && userMsgEl.dataset.dbId) || '', userText);
+        await _forkAndSend(userIndex, (userMsgEl && userMsgEl.dataset.dbId) || '', userText, _regenIds);
       } catch (err) {
         _pendingRegenAttachments = null;
         console.error('Fork failed:', err);
