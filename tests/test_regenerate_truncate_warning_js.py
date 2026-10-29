@@ -169,7 +169,7 @@ _HARNESS_PREAMBLE = """
 """
 
 
-def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_resolution, then_js: str = "", db_ids: bool = False, refuse_truncate: bool = False) -> str:
+def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_resolution, then_js: str = "", db_ids: bool = False, refuse_truncate: bool = False, file_ids: dict | None = None) -> str:
     # Globals are stubbed above as plain synchronous statements *before* the
     # dynamic import()s below run — unlike a static `import` declaration,
     # dynamic import() executes in program order, so chat.js's transitive
@@ -199,6 +199,13 @@ def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_
       // Persisted messages carry their database id; the page may have loaded
       // only the newest of them, so ids (not positions) identify a message.
       if ({json.dumps(db_ids)}) msgs.forEach((m, i) => {{ m.dataset.dbId = `db-${{i + 40}}`; }});
+      // Attach uploaded files ({{ index: file_id }}) the way rendered bubbles do.
+      for (const [i, fileId] of Object.entries({json.dumps(file_ids or {})})) {{
+        msgs[i].querySelectorAll = (sel) => sel === '[data-file-id]' ? [{{ dataset: {{ fileId }} }}] : [];
+      }}
+      // Record the attachments queued for each send as the button is clicked.
+      const sentAttachments = [];
+      sendBtnEl.click = () => {{ sendClicks.push(messageInputEl.value); sentAttachments.push(chat._pendingRegenAttachmentIds()); }};
       const box = {{ querySelectorAll: () => msgs, _isBox: true }};
       globalThis.document._box = box;
       const target = msgs[{target_index}];
@@ -220,6 +227,7 @@ def _scenario_script(func_call_js: str, roles: list, target_index: int, confirm_
         truncateBody: (fetchCalls.find(c => c.url.includes('/truncate')) || {{}}).body || null,
         selectedSessions,
         sendClicks,
+        sentAttachments,
       }}));
       process.exit(0);
     """
@@ -412,13 +420,22 @@ def test_edit_fork_choice_forks_before_user_turn_and_sends_edit():
     _assert_forked_instead(_run_node(script), keep_count=2, sent_text="edited question")
 
 
-def test_fork_choices_carry_the_user_message_attachments():
-    # The harness can't drive a real send, so check the hand-off in source:
-    # resend and regenerate both pass their collected file ids to the fork.
-    chat = (_JS_DIR / "chat.js").read_text(encoding="utf-8")
-    assert "if (attachments !== undefined) _pendingRegenAttachments = attachments;" in chat
-    assert "await _forkAndSend(msgIndex, userMsgElement.dataset.dbId || '', text, _ids);" in chat
-    assert "await _forkAndSend(userIndex, (userMsgEl && userMsgEl.dataset.dbId) || '', userText, _regenIds);" in chat
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_regenerate_fork_choice_keeps_the_user_message_attachments():
+    roles = ["user", "ai", "user", "ai", "user", "ai"]
+    script = _scenario_script("chat.regenerateFrom(target)", roles, 3, "alternate", file_ids={2: "file-abc"})
+    result = _run_node(script)
+    _assert_forked_instead(result, keep_count=2, sent_text="question 2")
+    assert result["sentAttachments"] == [["file-abc"]]
+
+
+@pytest.mark.skipif(not _HAS_NODE, reason="node binary not on PATH")
+def test_resend_fork_choice_keeps_the_user_message_attachments():
+    roles = ["user", "ai", "user", "ai", "user", "ai"]
+    script = _scenario_script("chat.resendUserMessage(target)", roles, 2, "alternate", file_ids={2: "file-abc"})
+    result = _run_node(script)
+    _assert_forked_instead(result, keep_count=2, sent_text="question 2")
+    assert result["sentAttachments"] == [["file-abc"]]
 
 
 # ---------------------------------------------------------------------------

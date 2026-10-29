@@ -7376,6 +7376,8 @@ import { invalidateSettings } from './appConfig.js';
   // File-ids carried over from the original user message during a regen, so
   // photos / OCR overrides survive into the new send. Consumed once.
   let _pendingRegenAttachments = null;
+  // Read-only view for tests.
+  export function _pendingRegenAttachmentIds() { return _pendingRegenAttachments; }
 
   /**
    * Called after streaming completes to attach variant navigation if this was a regen.
