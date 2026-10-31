@@ -65,6 +65,7 @@ export default ui;
         "export const registerEscapeLayer = () => () => {};\n"
         "export const bindMenuDismiss = () => {};\n"
     ),
+    "projects.mjs": "export default {};\n",
 }
 
 _HARNESS = r"""
@@ -336,6 +337,10 @@ def results(tmp_path_factory):
         (
             r"import \{ registerEscapeLayer, bindMenuDismiss \} from './escMenuStack\.js(?:[?#][^']*)?';",
             "import { registerEscapeLayer, bindMenuDismiss } from './escMenuStack.mjs';",
+        ),
+        (
+            r"import projectsModule from './projects\.js(?:[?#][^']*)?';",
+            "import projectsModule from './projects.mjs';",
         ),
     )
     for pattern, replacement in versioned_rewrites:
