@@ -520,7 +520,7 @@ function getFolderNames() {
 }
 
 /** Move a session to a folder via the API. */
-export async function moveToFolder(sessionId, folderName) {
+async function moveToFolder(sessionId, folderName) {
   // When the move changes who can see this chat's memories, ask whether they
   // go with it. null = the user cancelled the move.
   const memoryMove = await projectsModule.chooseMemoryMove(sessionId, folderName || '');
