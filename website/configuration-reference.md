@@ -21,7 +21,7 @@ described as a switch that turns something off, the read rejects `0`, `false`,
 `no` and `off` and treats everything else as on. The `Default` column is the
 value the code falls back to when the variable is unset, quoted from the source.
 
-The source tree reads **149** `ODYSSEUS_*` variables: 92 an operator may want to set, and 57 that are internal - sentinels, fixture switches, capture hooks and development tooling. The internal ones are listed too, in their own section, so this page can be checked against the source mechanically.
+The source tree reads **152** `ODYSSEUS_*` variables: 95 an operator may want to set, and 57 that are internal - sentinels, fixture switches, capture hooks and development tooling. The internal ones are listed too, in their own section, so this page can be checked against the source mechanically.
 
 > This page is generated. Edit `scripts/generate_env_reference.py` and
 > re-run it; `tests/test_env_reference.py` enforces that the committed page
@@ -149,6 +149,9 @@ The source tree reads **149** `ODYSSEUS_*` variables: 92 an operator may want to
 | `ODYSSEUS_MEDIA_MAX_VIDEO_FRAMES` | `8` | `src/media_ingress.py` | How many frames are sampled from a video. |
 | `ODYSSEUS_MEDIA_PROBE_TIMEOUT` | `15` | `src/media_ingress.py` | Seconds allowed for probing a video's metadata before giving up. |
 | `ODYSSEUS_MEMORY_IMPORT_MAX_BYTES` | `10 * 1024 * 1024` | `src/upload_limits.py` (+1 more) | Maximum bytes accepted for a memory import file. |
+| `ODYSSEUS_OCR_FIRST` | `'1'` | `src/vision_ocr.py` | Run local OCR on every image before the vision model describes it; set 0 to use the vision model alone. |
+| `ODYSSEUS_OCR_FIRST_TIMEOUT` | `'8'` | `src/vision_ocr.py` | Seconds local OCR may take on an image before the description goes ahead without it. |
+| `ODYSSEUS_OCR_MAX_SIDE` | `str(_MAX_SIDE_DEFAULT)` | `src/agent_tools/ocr_engine.py` | Longest image side in pixels before local OCR downscales it; 0 or less turns downscaling off. |
 | `ODYSSEUS_PERSONAL_UPLOAD_MAX_BYTES` | `25 * 1024 * 1024` | `src/upload_limits.py` (+1 more) | Maximum bytes accepted for a personal-documents upload. |
 | `ODYSSEUS_STT_MAX_AUDIO_BYTES` | `25 * 1024 * 1024` | `src/upload_limits.py` | Maximum bytes accepted for an audio file submitted for transcription. |
 | `ODYSSEUS_VISION_MAX_SIDE` | `'1280'` | `src/document_processor.py` | Maximum pixel side for image attachments sent directly to a vision model. |
@@ -302,7 +305,7 @@ reads three ways, because no single pattern covers the codebase:
   lines, so one read lives inside a string literal.
 
 The three passes are not redundancy. A line-based grep for a direct
-`os.environ.get("ODYSSEUS_...` call finds 117 of the 149 variables on this
+`os.environ.get("ODYSSEUS_...` call finds 120 of the 152 variables on this
 page. What it misses is reads through an env-reader helper, reads whose call
 spans more than one line, reads whose variable name is held in a module
 constant, and reads through a mapping passed in as an argument - which is the

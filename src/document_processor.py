@@ -489,15 +489,22 @@ def _resolve_vl_model(configured: str, owner: str | None = None, session_id: str
 def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> dict:
     """Analyze an image and return both text and the model that produced it."""
     logger.info(f"Analyzing image with VL model: {image_path}")
+    ocr_text = None
     try:
+        from src.vision_ocr import OCR_MODEL_LABEL, ocr_first_text, describe_prompt, model_label, with_text_block
+        ocr_text = ocr_first_text(image_path)
         settings = _load_vl_settings()
         if not settings.get("vision_enabled", True):
+            if ocr_text:
+                return {"text": with_text_block("", ocr_text), "model": OCR_MODEL_LABEL}
             return {"text": "[Vision is disabled — enable it in Settings → AI Defaults → Vision]", "model": ""}
         vl_model = settings.get("vision_model", "")
 
         try:
             url, model_id, headers = _resolve_vl_model(vl_model, owner=owner)
         except ValueError:
+            if ocr_text:
+                return {"text": with_text_block("", ocr_text), "model": OCR_MODEL_LABEL}
             return {"text": "[No vision model configured — set one in Settings → AI Defaults → Vision]", "model": vl_model or ""}
 
         with open(image_path, "rb") as f:
@@ -511,7 +518,7 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": VISION_DESCRIBE_PROMPT},
+                    {"type": "text", "text": describe_prompt(ocr_text)},
                     {"type": "image_url", "image_url": {"url": f"data:image/{img_format};base64,{img_data}"}},
                 ],
             }
@@ -530,7 +537,7 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
             try:
                 description = llm_call(_url, _model, vl_messages, headers=_headers, timeout=300, max_tokens=VISION_MAX_TOKENS, temperature=0.2)
                 logger.info("VL analysis complete with model %s", _model)
-                return {"text": description, "model": _model}
+                return {"text": with_text_block(description, ocr_text), "model": model_label(_model, ocr_text)}
             except Exception as e:
                 last_err = e
                 tag = "primary" if i == 0 else "candidate"
@@ -540,6 +547,8 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
 
     except Exception as e:
         logger.error(f"VL model unavailable: {e}")
+        if ocr_text:
+            return {"text": with_text_block("", ocr_text), "model": OCR_MODEL_LABEL}
         return {"text": "[VL model unavailable - image not analyzed]", "model": ""}
 
 
