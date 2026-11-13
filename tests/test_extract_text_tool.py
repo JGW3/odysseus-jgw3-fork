@@ -206,3 +206,17 @@ def test_text_in_two_directions_is_read_as_two_blocks(monkeypatch, tmp_path: Pat
     lines = ocr_engine.extract_image_text(tmp_path / "unused.png")["text"].splitlines()
     assert lines[:3] == ["OPEN 24 HOURS", "Coffee $1.50", "Pie $4.25"]
     assert sorted(lines[3:]) == ["LOT 1234", "MADE IN USA"]        # its own block, one line each
+
+
+def test_single_letters_join_the_text_next_to_them(monkeypatch, tmp_path: Path):
+    # A big slanted block and a small level one; a lone "F9" key sits by the
+    # level block and must be read with it, not with the bigger block.
+    boxes = [_slanted_box(100, 100 + 40 * row, 160, 24, 45) for row in range(4)]
+    boxes += [[[600, 500], [660, 500], [660, 520], [600, 520]],      # F10
+              [[670, 500], [730, 500], [730, 520], [670, 520]],      # F11
+              [[580, 500], [596, 500], [596, 520], [580, 520]]]      # F9: too squat to have a direction
+    txts = ["one two", "three four", "five six", "seven eight", "F10", "F11", "F9"]
+    output = SimpleNamespace(boxes=boxes, txts=txts, scores=[0.99] * len(txts))
+    monkeypatch.setattr(ocr_engine, "_engine", lambda: lambda _path: output)
+    lines = ocr_engine.extract_image_text(tmp_path / "unused.png")["text"].splitlines()
+    assert lines[-1] == "F9 F10 F11"

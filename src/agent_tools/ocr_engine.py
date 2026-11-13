@@ -81,8 +81,8 @@ def _direction_groups(boxes, gap: float = 20.0) -> list[list[int]]:
 
     A photo can hold text in several directions (a sign and a sideways label).
     Directions within `gap` degrees of each other form one group; squat boxes
-    (single letters, numbers) join the group whose direction they can't
-    contradict: the largest one. Largest group first.
+    (single letters, numbers), whose direction can't be told, join the group
+    of the nearest box that has one. Largest group first.
     """
     angled = sorted((a, i) for i, a in ((i, _box_angle(b)) for i, b in enumerate(boxes)) if a is not None)
     groups: list[list[int]] = []
@@ -97,9 +97,15 @@ def _direction_groups(boxes, gap: float = 20.0) -> list[list[int]]:
         groups[0] = groups.pop() + groups[0]
     if not groups:
         return [list(range(len(boxes)))]
+    def center(i):
+        return (sum(float(x) for x, _ in boxes[i]) / 4, sum(float(y) for _, y in boxes[i]) / 4)
+
+    group_of = {i: g for g, members in enumerate(groups) for i in members}
+    for i in (i for i, b in enumerate(boxes) if _box_angle(b) is None):
+        cx, cy = center(i)
+        nearest = min(group_of, key=lambda j: (center(j)[0] - cx) ** 2 + (center(j)[1] - cy) ** 2)
+        groups[group_of[nearest]].append(i)
     groups.sort(key=len, reverse=True)
-    squat = [i for i, b in enumerate(boxes) if _box_angle(b) is None]
-    groups[0].extend(squat)
     return groups
 
 
