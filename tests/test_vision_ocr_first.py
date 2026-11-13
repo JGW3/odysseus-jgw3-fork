@@ -67,3 +67,43 @@ def test_model_label_credits_ocr_when_it_supplied_the_text():
     assert vision_ocr.model_label("gemma4:q5c", "OPEN 24 HOURS") == "gemma4:q5c + RapidOCR"
     assert vision_ocr.model_label("gemma4:q5c", "") == "gemma4:q5c"
     assert vision_ocr.model_label("gemma4:q5c", None) == "gemma4:q5c"
+
+
+def test_prompt_says_ocr_can_be_wrong(monkeypatch):
+    monkeypatch.setattr(vision_ocr, "_read", lambda path: "Vout=1.3V+0.102V")
+    prompt = vision_ocr.describe_prompt(vision_ocr.ocr_first_text("exam.jpg"))
+    assert "it can be wrong, so trust the image" in prompt
+    # Asking it to also describe handwriting made gemma4 think through its
+    # whole token budget on a handwritten exam page (2 of 3 runs empty).
+    assert "handwriting" not in prompt
+
+
+def test_ocr_first_drops_low_confidence_fragments(monkeypatch):
+    from src.agent_tools import ocr_engine
+    seen = {}
+
+    def fake_extract(path, **kwargs):
+        seen.update(kwargs)
+        return {"text": "kept"}
+
+    monkeypatch.setattr(ocr_engine, "extract_image_text", fake_extract)
+    assert vision_ocr._read("page.jpg") == "kept"
+    assert seen["min_confidence"] == vision_ocr._MIN_CONFIDENCE > 0.5
+
+
+@pytest.mark.parametrize("echo", [
+    "\n\n<<<\nNAME: Jane Doe\nPage 1 of 5\n>>>",
+    "\n<<<\nNAME: Jane Doe\nPage 1 of 5\n>>>\n",
+])
+def test_an_echoed_ocr_block_is_not_kept_twice(echo):
+    described = "The first page of an exam.\n\nA red circle holds the score." + echo
+    caption = vision_ocr.with_text_block(described, "NAME: Jane Doe\nPage 1 of 5")
+    assert caption == ("The first page of an exam.\n\nA red circle holds the score.\n\n"
+                       "Text in image:\nNAME: Jane Doe\nPage 1 of 5")
+    assert "<<<" not in caption and ">>>" not in caption
+
+
+def test_prompt_and_echo_markers_stay_in_step():
+    prompt = vision_ocr.describe_prompt("SIGN")
+    assert "<<<\nSIGN\n>>>" in prompt
+    assert vision_ocr.with_text_block("Desc.\n\n<<<\nSIGN\n>>>", "SIGN") == "Desc.\n\nText in image:\nSIGN"

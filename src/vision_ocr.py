@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as _Timeout
 from pathlib import Path
 from typing import Optional
@@ -23,14 +24,18 @@ logger = logging.getLogger(__name__)
 _POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="ocr-first")
 _MIN_CHARS = 3
 _MAX_PROMPT_CHARS = 4000
+# Stricter than the engine's 0.5 default: on photographed pages, lines scored
+# 0.5-0.7 were stray fragments (diagram labels, edges of other sheets), never
+# real text. Misreads can score higher, which the prompt warns about.
+_MIN_CONFIDENCE = 0.7
 OCR_MODEL_LABEL = "RapidOCR"
 
 DESCRIBE_WITH_TEXT_PROMPT = (
     "Describe this image: a one or two sentence overview, a blank line, then "
     "the details. Say what any text is and where; if it is short, like a sign "
     "or a label, say what it says. Don't copy out longer text such as a recipe "
-    "or a page; just say what it is. The full text, read separately, will be "
-    "attached below your description:\n<<<\n{ocr}\n>>>"
+    "or a page; just say what it is. OCR text, attached after your "
+    "description; it can be wrong, so trust the image:\n<<<\n{ocr}\n>>>"
 )
 DESCRIBE_NO_TEXT_PROMPT = (
     "Describe this image: a one or two sentence overview, a blank line, then "
@@ -51,7 +56,7 @@ def _timeout() -> float:
 
 def _read(path: str) -> str:
     from src.agent_tools.ocr_engine import extract_image_text
-    result = extract_image_text(Path(path)) or {}
+    result = extract_image_text(Path(path), min_confidence=_MIN_CONFIDENCE) or {}
     text = result.get("text")
     if not isinstance(text, str):
         text = "\n".join(str(line.get("t", "")) for line in result.get("lines", []))
@@ -81,8 +86,13 @@ def describe_prompt(ocr_text: Optional[str]) -> str:
     return DESCRIBE_WITH_TEXT_PROMPT.format(ocr=ocr_text[:_MAX_PROMPT_CHARS])
 
 
+# The prompt fences the OCR text in <<< >>>; a model sometimes copies that
+# block back into its description, which would show the text twice.
+_ECHOED_BLOCK_RE = re.compile(r"\n*[ \t]*<<<[ \t]*\n.*?\n[ \t]*>>>[ \t]*", re.S)
+
+
 def with_text_block(description: str, ocr_text: Optional[str]) -> str:
-    description = (description or "").strip()
+    description = _ECHOED_BLOCK_RE.sub("", description or "").strip()
     if not ocr_text:
         return description
     block = f"Text in image:\n{ocr_text}"
