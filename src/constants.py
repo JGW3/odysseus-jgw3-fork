@@ -181,8 +181,10 @@ DEFAULT_TEMPERATURE = 1.0
 DEFAULT_MAX_TOKENS = 32768
 # Vision/OCR calls need more headroom than a plain caption would suggest:
 # thinking-capable models (Gemma 4, Qwen3-VL Thinking) spend the budget in
-# `reasoning` and return empty `content` if capped too low.
-VISION_MAX_TOKENS = 2000
+# `reasoning` and return empty `content` if capped too low. It is a ceiling,
+# not a reservation: a photographed exam page used 840-1560 tokens (gemma4,
+# about 40 tok/s on a P40), and runs that went past 2000 came back empty.
+VISION_MAX_TOKENS = 4096
 
 
 def internal_api_base() -> str:
