@@ -32,7 +32,7 @@ import { startBackgroundToolJobs } from './js/backgroundToolJobs.js';
 import memoryModule from './js/memory.js';
 import voiceRecorderModule from './js/voiceRecorder.js';
 import censorModule from './js/censor.js';
-import galleryModule from './js/gallery.js?v=20260910promptcopy1';
+import galleryModule from './js/gallery.js?v=20261105captionsource1';
 import { UI_VIS_DEFAULT_OFF, resolveVisibility } from './js/ui_visibility.js?v=20260829chatstyle12';
 import tasksModule from './js/tasks.js?v=20260914taskmodel1';
 import calendarModule from './js/calendar.js?v=20260914emailsource11';
@@ -561,10 +561,21 @@ function initializeEventListeners() {
 
   // Export: PDF
   const exportPdfBtn = el('export-pdf-btn');
+  let preparingPdf = false;
   if (exportPdfBtn) {
-    exportPdfBtn.addEventListener('click', (e) => {
+    exportPdfBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       exportMenu.classList.remove('open');
+      if (preparingPdf) return;
+      preparingPdf = true;
+      try {
+        await sessionModule.prepareHistoryForPrint();
+      } catch (error) {
+        uiModule.showError(error?.message || 'Could not prepare the chat for PDF export.');
+        return;
+      } finally {
+        preparingPdf = false;
+      }
       const meta = sessionModule.getSessions().find(s => s.id === sessionModule.getCurrentSessionId());
       const sessionName = meta ? meta.name : 'Odysseus Chat';
       const originalTitle = document.title;
@@ -1308,8 +1319,7 @@ function initializeEventListeners() {
   const toolThemeBtn = el('tool-theme-btn');
   if (toolThemeBtn) {
     toolThemeBtn.addEventListener('click', () => {
-      const tm = document.getElementById('theme-modal');
-      if (tm) tm.classList.remove('hidden');
+      themeModule.openPopup();
     });
   }
 
