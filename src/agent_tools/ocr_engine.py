@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import math
 import os
 from pathlib import Path
 import re
@@ -64,6 +65,71 @@ def _box_metrics(box):
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
     return min(xs), max(xs), min(ys), max(ys), sum(xs) / len(xs), sum(ys) / len(ys), max(1.0, max(ys) - min(ys))
+
+def _box_angle(box) -> float | None:
+    """Direction a word box's text runs, in degrees; None when too squat to tell."""
+    (x0, y0), (x1, y1) = (float(v) for v in box[0]), (float(v) for v in box[1])
+    width = math.hypot(x1 - x0, y1 - y0)
+    height = math.hypot(float(box[3][0]) - x0, float(box[3][1]) - y0)
+    if width < 1.5 * max(height, 1.0):
+        return None
+    return math.degrees(math.atan2(y1 - y0, x1 - x0))
+
+
+def _direction_groups(boxes, gap: float = 20.0) -> list[list[int]]:
+    """Indexes of the boxes, grouped by the direction their text runs.
+
+    A photo can hold text in several directions (a sign and a sideways label).
+    Directions within `gap` degrees of each other form one group; squat boxes
+    (single letters, numbers) join the group whose direction they can't
+    contradict: the largest one. Largest group first.
+    """
+    angled = sorted((a, i) for i, a in ((i, _box_angle(b)) for i, b in enumerate(boxes)) if a is not None)
+    groups: list[list[int]] = []
+    angles: list[list[float]] = []
+    for angle, i in angled:
+        if angles and angle - angles[-1][-1] <= gap:
+            groups[-1].append(i); angles[-1].append(angle)
+        else:
+            groups.append([i]); angles.append([angle])
+    # The circle wraps: text at +179 and -179 degrees runs the same way.
+    if len(groups) > 1 and angles[0][0] + 360 - angles[-1][-1] <= gap:
+        groups[0] = groups.pop() + groups[0]
+    if not groups:
+        return [list(range(len(boxes)))]
+    groups.sort(key=len, reverse=True)
+    squat = [i for i, b in enumerate(boxes) if _box_angle(b) is None]
+    groups[0].extend(squat)
+    return groups
+
+
+def _text_tilt(boxes) -> float:
+    """The page's text angle in degrees, from the top edges of the word boxes.
+
+    Each box runs along its text (corner 0 to corner 1), so on a slanted photo
+    they share the slant. Short or squat boxes say little about direction.
+    """
+    angles = []
+    for box in boxes:
+        (x0, y0), (x1, y1) = (float(v) for v in box[0]), (float(v) for v in box[1])
+        width = math.hypot(x1 - x0, y1 - y0)
+        height = math.hypot(float(box[3][0]) - x0, float(box[3][1]) - y0)
+        if width >= 1.5 * max(height, 1.0):
+            angles.append(math.degrees(math.atan2(y1 - y0, x1 - x0)))
+    if len(angles) < 2:
+        return 0.0
+    angles.sort()
+    return angles[len(angles) // 2]
+
+
+def _level(box, tilt: float):
+    """Box corners rotated so text tilted by `tilt` degrees runs level."""
+    if not tilt:
+        return box
+    a = math.radians(-tilt)
+    cos, sin = math.cos(a), math.sin(a)
+    return [(float(x) * cos - float(y) * sin, float(x) * sin + float(y) * cos) for x, y in box]
+
 
 def _same_line(a, b) -> bool:
     overlap = min(a["max_y"], b["max_y"]) - max(a["min_y"], b["min_y"])
@@ -195,7 +261,7 @@ def extract_image_text(path: Path, *, include_layout: bool = False, numeric_only
                 os.unlink(temp_path)
             except OSError:
                 pass
-    lines, entries, accepted = [], [], 0
+    lines, kept, accepted = [], [], 0
     boxes = [] if result.boxes is None else result.boxes
     texts = [] if result.txts is None else result.txts
     scores = [] if result.scores is None else result.scores
@@ -212,8 +278,24 @@ def extract_image_text(path: Path, *, include_layout: bool = False, numeric_only
         if include_layout:
             line["box"] = points
         lines.append(line)
-        entries.append({"t": text, "p": score, "min_x": metrics[0], "max_x": metrics[1],
-                        "min_y": metrics[2], "max_y": metrics[3], "cx": metrics[4], "cy": metrics[5], "h": metrics[6]})
-    text = _reading_text(entries)
+        kept.append((text, score, box))
+    # Rebuild lines in the text's own direction: on a slanted photo, upright
+    # bounding boxes of neighbouring lines overlap and would all be joined.
+    # Text running in different directions is read as separate blocks.
+    blocks = []
+    for group in _direction_groups([box for _, _, box in kept]):
+        tilt = _text_tilt([kept[i][2] for i in group])
+        if abs(tilt) < 3:
+            tilt = 0.0
+        entries = []
+        for i in group:
+            text_, score, box = kept[i]
+            metrics = _box_metrics(_level(box, tilt))
+            entries.append({"t": text_, "p": score, "min_x": metrics[0], "max_x": metrics[1],
+                            "min_y": metrics[2], "max_y": metrics[3], "cx": metrics[4], "cy": metrics[5], "h": metrics[6]})
+        block = _reading_text(entries)
+        if block:
+            blocks.append(block)
+    text = "\n".join(blocks)
     return {"legend": {"t": "text", "p": "confidence", "xy": "pixel center"}, "count": accepted,
             "returned": len(lines), "truncated": accepted > len(lines), "lines": lines, "text": text}

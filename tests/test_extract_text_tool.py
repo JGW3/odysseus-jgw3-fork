@@ -159,3 +159,50 @@ def test_receipt_prices_stay_on_their_item_row():
     for i in range(12):
         rows += [_box(f"Item number {i}", 30, 200, 20 + 20 * i), _box(f"{i}.25", 420, 470, 21 + 20 * i)]
     assert _reading_text(rows).splitlines() == [f"Item number {i} {i}.25" for i in range(12)]
+
+
+def _slanted_box(x, y, w, h, degrees):
+    import math
+    a = math.radians(degrees)
+    corners = [(0, 0), (w, 0), (w, h), (0, h)]
+    return [[x + cx * math.cos(a) - cy * math.sin(a), y + cx * math.sin(a) + cy * math.cos(a)] for cx, cy in corners]
+
+
+def test_slanted_photo_keeps_its_lines(monkeypatch, tmp_path: Path):
+    # Three lines of two words, photographed at 40 degrees: each line's words
+    # sit along the slant, and the lines step down the page at a right angle.
+    import math
+    a = math.radians(40)
+    words = [("USES:", "Great"), ("Purple", "glue"), ("Dries", "clear")]
+    boxes, txts = [], []
+    for row, (first, second) in enumerate(words):
+        base_x, base_y = 300 - row * 40 * math.sin(a), 100 + row * 40 * math.cos(a)
+        for col, word in enumerate((first, second)):
+            boxes.append(_slanted_box(base_x + col * 130 * math.cos(a), base_y + col * 130 * math.sin(a), 110, 24, 40))
+            txts.append(word)
+    output = SimpleNamespace(boxes=boxes, txts=txts, scores=[0.99] * len(txts))
+    monkeypatch.setattr(ocr_engine, "_engine", lambda: lambda _path: output)
+    result = ocr_engine.extract_image_text(tmp_path / "unused.png")
+    assert result["text"].splitlines() == ["USES: Great", "Purple glue", "Dries clear"]
+
+
+def test_level_text_is_not_rotated():
+    level = [[[0, 0], [100, 0], [100, 20], [0, 20]], [[0, 40], [80, 41], [80, 61], [0, 60]]]
+    assert abs(ocr_engine._text_tilt(level)) < 3
+
+
+def test_text_in_two_directions_is_read_as_two_blocks(monkeypatch, tmp_path: Path):
+    # A level sign with a label running up its right edge (90 degrees off).
+    boxes = [
+        [[0, 0], [200, 0], [200, 30], [0, 30]],          # OPEN 24 HOURS
+        [[0, 50], [150, 50], [150, 80], [0, 80]],        # Coffee $1.50
+        [[0, 100], [150, 100], [150, 130], [0, 130]],    # Pie $4.25
+        [[400, 300], [400, 100], [430, 100], [430, 300]],  # MADE IN USA, read bottom to top
+        [[450, 300], [450, 120], [480, 120], [480, 300]],  # LOT 1234
+    ]
+    output = SimpleNamespace(boxes=boxes, txts=["OPEN 24 HOURS", "Coffee $1.50", "Pie $4.25", "MADE IN USA", "LOT 1234"],
+                             scores=[0.99] * 5)
+    monkeypatch.setattr(ocr_engine, "_engine", lambda: lambda _path: output)
+    lines = ocr_engine.extract_image_text(tmp_path / "unused.png")["text"].splitlines()
+    assert lines[:3] == ["OPEN 24 HOURS", "Coffee $1.50", "Pie $4.25"]
+    assert sorted(lines[3:]) == ["LOT 1234", "MADE IN USA"]        # its own block, one line each
