@@ -388,6 +388,7 @@ class GalleryImage(TimestampMixin, Base):
     filename   = Column(String, nullable=False, unique=True)
     prompt     = Column(Text, nullable=False, default="")
     caption    = Column(Text, nullable=True, default="")
+    caption_source = Column(String, nullable=True, default="")   # "vision:<model>" or "user:<name>"
     model      = Column(String, nullable=True)
     size       = Column(String, nullable=True)
     quality    = Column(String, nullable=True)
@@ -1610,6 +1611,10 @@ def _migrate_add_gallery_caption_column():
             conn.execute("ALTER TABLE gallery_images ADD COLUMN caption TEXT DEFAULT ''")
             conn.commit()
             logging.getLogger(__name__).info("Migrated: added caption column to gallery_images")
+        if columns and "caption_source" not in columns:
+            conn.execute("ALTER TABLE gallery_images ADD COLUMN caption_source TEXT DEFAULT ''")
+            conn.commit()
+            logging.getLogger(__name__).info("Migrated: added caption_source column to gallery_images")
     except Exception as e:
         logging.getLogger(__name__).warning(f"Migration gallery caption column failed: {e}")
     finally:
@@ -2149,6 +2154,7 @@ class CalendarEvent(TimestampMixin, Base):
     is_utc      = Column(Boolean, default=False, nullable=False)
     rrule       = Column(String, default="")
     recurrence_exdates = Column(Text, default="")  # JSON list of skipped occurrence starts
+    tzid        = Column(String, nullable=True)
     color       = Column(String, nullable=True)  # per-event color override
     status      = Column(String, default="confirmed")  # confirmed, cancelled
     importance  = Column(String, default="normal")    # low | normal | high | critical
@@ -2461,6 +2467,7 @@ def init_db():
     _migrate_add_calendar_account_id()
     _migrate_add_caldav_sync_columns()
     _migrate_add_calendar_recurrence_exdates()
+    _migrate_add_calendar_tzid()
     _migrate_add_note_gallery_id()
     _migrate_chat_messages_fts()
     _migrate_encrypt_email_passwords()
@@ -2895,6 +2902,27 @@ def _migrate_add_calendar_recurrence_exdates():
         conn.commit()
     except Exception as e:
         logging.getLogger(__name__).warning(f"calendar_events recurrence_exdates migration failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+def _migrate_add_calendar_tzid():
+    """Store the source TZID so imported recurring events expand in their own zone."""
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(calendar_events)").fetchall()]
+        if columns and "tzid" not in columns:
+            conn.execute("ALTER TABLE calendar_events ADD COLUMN tzid TEXT")
+        conn.commit()
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"calendar_events tzid migration failed: {e}")
     finally:
         try:
             conn.close()

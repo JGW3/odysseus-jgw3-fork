@@ -2,6 +2,7 @@
 """Document processing: PDF/OCR extraction, text file handling, image VL analysis, user content building."""
 
 import os
+import asyncio
 import io
 import logging
 import mimetypes
@@ -489,15 +490,22 @@ def _resolve_vl_model(configured: str, owner: str | None = None, session_id: str
 def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> dict:
     """Analyze an image and return both text and the model that produced it."""
     logger.info(f"Analyzing image with VL model: {image_path}")
+    ocr_text = None
     try:
+        from src.vision_ocr import OCR_MODEL_LABEL, ocr_first_text, describe_prompt, model_label, with_text_block
+        ocr_text = ocr_first_text(image_path)
         settings = _load_vl_settings()
         if not settings.get("vision_enabled", True):
+            if ocr_text:
+                return {"text": with_text_block("", ocr_text), "model": OCR_MODEL_LABEL}
             return {"text": "[Vision is disabled — enable it in Settings → AI Defaults → Vision]", "model": ""}
         vl_model = settings.get("vision_model", "")
 
         try:
             url, model_id, headers = _resolve_vl_model(vl_model, owner=owner)
         except ValueError:
+            if ocr_text:
+                return {"text": with_text_block("", ocr_text), "model": OCR_MODEL_LABEL}
             return {"text": "[No vision model configured — set one in Settings → AI Defaults → Vision]", "model": vl_model or ""}
 
         with open(image_path, "rb") as f:
@@ -511,7 +519,7 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
             {
                 "role": "user",
                 "content": [
-                    {"type": "text", "text": VISION_DESCRIBE_PROMPT},
+                    {"type": "text", "text": describe_prompt(ocr_text)},
                     {"type": "image_url", "image_url": {"url": f"data:image/{img_format};base64,{img_data}"}},
                 ],
             }
@@ -530,7 +538,7 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
             try:
                 description = llm_call(_url, _model, vl_messages, headers=_headers, timeout=300, max_tokens=VISION_MAX_TOKENS, temperature=0.2)
                 logger.info("VL analysis complete with model %s", _model)
-                return {"text": description, "model": _model}
+                return {"text": with_text_block(description, ocr_text), "model": model_label(_model, ocr_text)}
             except Exception as e:
                 last_err = e
                 tag = "primary" if i == 0 else "candidate"
@@ -540,12 +548,38 @@ def analyze_image_with_vl_result(image_path: str, owner: str | None = None) -> d
 
     except Exception as e:
         logger.error(f"VL model unavailable: {e}")
+        if ocr_text:
+            return {"text": with_text_block("", ocr_text), "model": OCR_MODEL_LABEL}
         return {"text": "[VL model unavailable - image not analyzed]", "model": ""}
 
 
 def analyze_image_with_vl(image_path: str, owner: str | None = None) -> str:
     """Analyze an image using the admin-configured Vision-Language model."""
     return analyze_image_with_vl_result(image_path, owner=owner).get("text", "")
+
+
+
+async def describe_image_for_caption(
+    image_path: str, url: str, model_id: str, headers: dict | None = None, mime: str | None = None,
+) -> str:
+    """One caption-only call to the model/endpoint that answered the chat turn
+    (its reply answers the user, not a caption). ``mime`` is the upload's
+    resolved MIME, used for an extensionless path as in build_user_content.
+    """
+    ext = os.path.splitext(image_path)[1].lower()
+    fallback_format = ext[1:] or (mime.split("/", 1)[1] if (mime or "").startswith("image/") else "jpeg")
+    data_url, _ = await asyncio.to_thread(encode_image_data_url, image_path, fallback_format)
+    # Local OCR reads the image's text first; the model only describes it,
+    # and the exact text is attached under "Text in image:".
+    from src.vision_ocr import ocr_first_text, describe_prompt, with_text_block
+    ocr_text = await asyncio.to_thread(ocr_first_text, image_path)
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": describe_prompt(ocr_text)},
+        {"type": "image_url", "image_url": {"url": data_url}},
+    ]}]
+    from src.llm_core import llm_call_async
+    # No max_tokens cap, and a 300s timeout: thinking models can take a while.
+    return with_text_block(await llm_call_async(url, model_id, messages, headers=headers, timeout=300), ocr_text)
 
 
 def _vision_max_side() -> int:

@@ -153,20 +153,70 @@ function _updateOcrCount() {
 // Long OCR captions get collapsed to a ~40-word preview in the detail
 // panel. Full text stays in the DOM so copy and in-page search still
 // see it; the Vision text editor is unaffected and shows it in full.
-function _captionBlock(caption, esc) {
-  const full = String(caption || '').trim();
-  const i = full.search(/\n\s*\n/);
-  if (i < 0) return `<div class="gallery-detail-prompt">${esc(full)}</div>`;
-  const summary = full.slice(0, i).trim();
-  const rest = full.slice(i).trim();
-  return `<div class="gallery-detail-prompt">`
-    + `<span id="gallery-caption-short">${esc(summary)}<br>`
-    + `<button type="button" id="gallery-caption-toggle" class="gallery-caption-toggle-btn">show more</button>`
-    + `</span>`
-    + `<span id="gallery-caption-full" hidden>${esc(summary)}<br><br>${esc(rest).replace(/\n/g, '<br>')}<br>`
-    + `<button type="button" id="gallery-caption-collapse" class="gallery-caption-toggle-btn">show less</button>`
-    + `</span></div>`;
+// Who wrote the caption, shown like a chat attachment's "Vision: …" label:
+// the vision model's name, or "User: <name>" for a hand-written one.
+// Who wrote each part of the caption: the description's author ("Vision: <model>"
+// or "User: <name>") and, when OCR supplied the text, "OCR: RapidOCR".
+function _captionSources(source) {
+  const value = String(source || '');
+  const sep = value.indexOf(':');
+  if (sep < 0) return { description: '', text: '' };
+  const kind = value.slice(0, sep);
+  let who = value.slice(sep + 1).trim();
+  if (kind === 'user') return { description: `User: ${who || 'unknown'}`, text: '' };
+  if (kind !== 'vision' || !who) return { description: '', text: '' };
+  if (who === 'RapidOCR') return { description: '', text: 'OCR: RapidOCR' };
+  const ocr = who.endsWith(' + RapidOCR');
+  if (ocr) who = who.slice(0, -' + RapidOCR'.length).trim();
+  return { description: `Vision: ${who.split('/').pop()}`, text: ocr ? 'OCR: RapidOCR' : '' };
 }
+function _sourceLabel(text, esc) {
+  return text ? `<div class="attach-vision-model gallery-caption-source">${esc(text)}</div>` : '';
+}
+// OCR text attached under "Text in image:" gets its own panel, so the exact
+// words stand apart from the model's description.
+function _splitTextBlock(caption) {
+  const full = String(caption || '').trim();
+  const header = 'Text in image:\n';
+  if (full.startsWith(header)) return ['', full.slice(header.length).trim()];
+  const at = full.indexOf('\n\n' + header);
+  if (at < 0) return [full, ''];
+  return [full.slice(0, at).trim(), full.slice(at + 2 + header.length).trim()];
+}
+function _captionSections(caption, source, esc) {
+  const [description, imageText] = _splitTextBlock(caption);
+  const who = _captionSources(source);
+  const br = (t) => esc(t).replace(/\n/g, '<br>');
+  const gap = description.search(/\n\s*\n/);
+  const summary = gap < 0 ? description : description.slice(0, gap).trim();
+  const rest = gap < 0 ? '' : description.slice(gap).trim();
+  // One show more / show less covers the rest of the description and the
+  // OCR text; a caption with neither has nothing to expand.
+  const collapsible = Boolean(rest || imageText);
+  const more = `<button type="button" id="gallery-caption-toggle" class="gallery-caption-toggle-btn">show more</button>`;
+  const less = `<button type="button" id="gallery-caption-collapse" class="gallery-caption-toggle-btn">show less</button>`;
+  let html = '';
+  if (description) {
+    html += `<div class="gallery-detail-section"><label>AI description</label><div class="gallery-detail-prompt">`;
+    if (collapsible) {
+      html += `<span id="gallery-caption-short">${esc(summary)}<br>${more}</span>`
+        + `<span id="gallery-caption-full" hidden>${esc(summary)}${rest ? `<br><br>${br(rest)}` : ''}${imageText ? '' : `<br>${less}`}</span>`;
+    } else {
+      html += esc(summary);
+    }
+    html += `</div>${_sourceLabel(who.description, esc)}</div>`;
+  }
+  if (imageText) {
+    const hidden = description ? ' hidden' : '';
+    html += `<div class="gallery-detail-section gallery-ocr-panel" id="gallery-caption-ocr"${hidden}><label>OCR text in image</label>`
+      + `<pre class="attach-ocr-text gallery-ocr-text">${esc(imageText)}</pre>`
+      + _sourceLabel(who.text || (description ? '' : who.description), esc)
+      + (description ? `<div class="gallery-detail-prompt">${less}</div>` : '')
+      + `</div>`;
+  }
+  return html;
+}
+
 let _search = '';
 // Stack of active tag filters. Multiple tags AND together — the user
 // builds this up by clicking tag chips or by hitting Enter in the
@@ -1707,7 +1757,7 @@ function _openDetail(img) {
             <svg class="gallery-name-enter" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 10 4 15 9 20"/><path d="M20 4v7a4 4 0 0 1-4 4H4"/></svg>
           </div>
         </div>
-        ${img.caption ? `<div class="gallery-detail-section"><label>OCR / AI description</label>${_captionBlock(img.caption, _esc)}</div>` : ''}
+        ${img.caption ? _captionSections(img.caption, img.caption_source, _esc) : ''}
         ${img.prompt && img.model !== 'imported' ? `<div class="gallery-detail-section gallery-detail-prompt-section"><label>Prompt</label><div class="gallery-detail-prompt">${_esc(img.prompt)}</div><div class="gallery-detail-mini-actions"><button class="gallery-detail-mini-btn" id="gallery-detail-copy-prompt"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button><button class="gallery-detail-mini-btn" id="gallery-detail-reuse-prompt"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>Reuse in chat</button></div></div>` : ''}
         <div class="gallery-detail-meta-grid">
           <div class="gallery-detail-meta-card"><span>Date</span><strong>${date}</strong></div>
@@ -2010,12 +2060,15 @@ function _openDetail(img) {
   // long enough to collapse, so guard with optional chaining.
   const _capShort = document.getElementById('gallery-caption-short');
   const _capFull = document.getElementById('gallery-caption-full');
+  const _capOcr = document.getElementById('gallery-caption-ocr');
   document.getElementById('gallery-caption-toggle')?.addEventListener('click', () => {
     if (_capShort) _capShort.hidden = true;
     if (_capFull) _capFull.hidden = false;
+    if (_capOcr) _capOcr.hidden = false;
   });
   document.getElementById('gallery-caption-collapse')?.addEventListener('click', () => {
     if (_capFull) _capFull.hidden = true;
+    if (_capOcr) _capOcr.hidden = true;
     if (_capShort) _capShort.hidden = false;
   });
   document.getElementById('gallery-download-btn').addEventListener('click', async () => {

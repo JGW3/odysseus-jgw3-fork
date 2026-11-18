@@ -989,7 +989,7 @@ button.hamburger {
 .katex { font-size: 1.1em; }
 
 /* Hide thinking sections globally via settings toggle */
-body.hide-thinking .thinking-section { display: none !important; }
+body.hide-thinking .thinking-section:not(.image-text-section) { display: none !important; }
 
 /* Widen chat area via settings toggle */
 body.fullwidth-chat .chat-history {

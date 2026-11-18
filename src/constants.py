@@ -79,6 +79,7 @@ CONTAINMENT_STATE_FILE = os.path.join(DATA_DIR, "containment_grants.json")
 VAULT_FILE = os.path.join(DATA_DIR, "vault.json")
 TIDY_CALENDAR_STATE_FILE = os.path.join(DATA_DIR, "tidy_calendar_state.json")
 SKILLS_FILE = os.path.join(DATA_DIR, "skills.json")
+MODEL_CUSTOMIZATIONS_FILE = os.path.join(DATA_DIR, "model_customizations.json")
 APP_DB = os.path.join(DATA_DIR, "app.db")
 SCHEDULED_EMAILS_DB = os.path.join(DATA_DIR, "scheduled_emails.db")
 EMAIL_CACHE_DB = os.path.join(DATA_DIR, "email_cache.db")
@@ -175,14 +176,17 @@ AGENT_ISOLATED_TMP_DIRNAME = ".tmp"
 
 # Auth policy
 PASSWORD_MIN_LENGTH = 8
+USERNAME_MAX_LENGTH = 64
 
 # Default parameters
 DEFAULT_TEMPERATURE = 1.0
 DEFAULT_MAX_TOKENS = 32768
 # Vision/OCR calls need more headroom than a plain caption would suggest:
 # thinking-capable models (Gemma 4, Qwen3-VL Thinking) spend the budget in
-# `reasoning` and return empty `content` if capped too low.
-VISION_MAX_TOKENS = 2000
+# `reasoning` and return empty `content` if capped too low. It is a ceiling,
+# not a reservation: a photographed exam page used 840-1560 tokens (gemma4,
+# about 40 tok/s on a P40), and runs that went past 2000 came back empty.
+VISION_MAX_TOKENS = 4096
 
 
 def internal_api_base() -> str:

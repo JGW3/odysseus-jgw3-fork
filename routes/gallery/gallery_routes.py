@@ -3365,13 +3365,20 @@ def setup_gallery_routes() -> APIRouter:
 
             # Explicit ?model= overrides the configured Vision model so OCR can
             # run on a different model than tagging without changing Settings.
+            from src.vision_ocr import OCR_MODEL_LABEL, ocr_first_text, describe_prompt, model_label, with_text_block
+            ocr_text = await asyncio.to_thread(ocr_first_text, str(img_path))
             try:
                 caption, model_name = await _call_vision_model(
-                    img_path, VISION_DESCRIBE_PROMPT, user, model_override=(model or ""),
+                    img_path, describe_prompt(ocr_text), user, model_override=(model or ""),
                     session_id=img.session_id,
                 )
+                caption = with_text_block(caption, ocr_text)
+                model_name = model_label(model_name, ocr_text)
             except VisionRequestError as vision_err:
-                return {"error": _vision_error_message(vision_err)}
+                if not ocr_text:
+                    return {"error": _vision_error_message(vision_err)}
+                # No usable vision model: the OCR text alone still describes it.
+                caption, model_name = with_text_block("", ocr_text), OCR_MODEL_LABEL
 
             img.caption = caption
             db.commit()
