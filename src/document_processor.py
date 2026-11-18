@@ -558,13 +558,6 @@ def analyze_image_with_vl(image_path: str, owner: str | None = None) -> str:
     return analyze_image_with_vl_result(image_path, owner=owner).get("text", "")
 
 
-# Short and verb-first: an over-specified prompt makes thinking models spend
-# their budget checking compliance instead of describing the image.
-_MAIN_MODEL_CAPTION_PROMPT = (
-    "Describe this image in one or two sentences, suitable as a photo caption. "
-    "Report only what is visible in the image itself."
-)
-
 
 async def describe_image_for_caption(
     image_path: str, url: str, model_id: str, headers: dict | None = None, mime: str | None = None,
@@ -576,13 +569,17 @@ async def describe_image_for_caption(
     ext = os.path.splitext(image_path)[1].lower()
     fallback_format = ext[1:] or (mime.split("/", 1)[1] if (mime or "").startswith("image/") else "jpeg")
     data_url, _ = await asyncio.to_thread(encode_image_data_url, image_path, fallback_format)
+    # Local OCR reads the image's text first; the model only describes it,
+    # and the exact text is attached under "Text in image:".
+    from src.vision_ocr import ocr_first_text, describe_prompt, with_text_block
+    ocr_text = await asyncio.to_thread(ocr_first_text, image_path)
     messages = [{"role": "user", "content": [
-        {"type": "text", "text": _MAIN_MODEL_CAPTION_PROMPT},
+        {"type": "text", "text": describe_prompt(ocr_text)},
         {"type": "image_url", "image_url": {"url": data_url}},
     ]}]
     from src.llm_core import llm_call_async
     # No max_tokens cap, and a 300s timeout: thinking models can take a while.
-    return await llm_call_async(url, model_id, messages, headers=headers, timeout=300)
+    return with_text_block(await llm_call_async(url, model_id, messages, headers=headers, timeout=300), ocr_text)
 
 
 def _vision_max_side() -> int:

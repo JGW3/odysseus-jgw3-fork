@@ -75,6 +75,5 @@ def test_hand_edits_are_credited_to_their_author_and_the_gallery_shows_it():
     assert "write_cache_kind(_vision_cache_path(file_id), USER)" in upload
     assert "text, user_source(current_user))" in upload    # whoever saved the text
     js = (ROOT / "static/js/gallery.js").read_text(encoding="utf-8")
-    assert "function _captionSourceLabel(source, esc)" in js
-    assert "User: ${esc(who || 'unknown')}" in js and "Vision: ${esc(who.split('/').pop())}" in js
-    assert "${_captionSourceLabel(img.caption_source, _esc)}" in js
+    # The description and the OCR text are separate sections, each credited.
+    assert "_captionSections(img.caption, img.caption_source, _esc)" in js

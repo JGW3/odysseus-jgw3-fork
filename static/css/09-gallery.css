@@ -539,6 +539,41 @@ body.gallery-selecting .gallery-dl-btn,
   opacity: 0.85;
   margin-top: 3px;
 }
+.attach-ocr { max-width: 300px; }
+.gallery-ocr-panel > label { display: block; margin-bottom: 4px; }
+.gallery-ocr-panel[hidden] { display: none; }
+/* OCR text at the top of a reply: the thinking block's format in its own colour. */
+.thinking-section.image-text-section {
+  --ocr-accent: var(--hl-function, #61afef);
+  border-color: color-mix(in srgb, var(--ocr-accent) 30%, transparent);
+  background: color-mix(in srgb, var(--ocr-accent) 5%, transparent);
+}
+.image-text-section > .thinking-header {
+  background: color-mix(in srgb, var(--ocr-accent) 8%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--ocr-accent) 20%, transparent);
+}
+.image-text-section > .thinking-header:hover { background: color-mix(in srgb, var(--ocr-accent) 12%, transparent); }
+.image-text-section .thinking-header-left,
+.image-text-section .thinking-toggle { color: var(--ocr-accent); }
+.image-text-meta { display: flex; align-items: center; gap: 6px; }
+.image-text-time { font-size: 11px; opacity: 0.4; font-variant-numeric: tabular-nums; }
+.image-text-name { font-size: 0.85em; opacity: 0.6; margin: 8px 0 2px; }
+.image-text-name:first-child { margin-top: 0; }
+.thinking-content-inner .image-text-body { white-space: pre-wrap; word-break: break-word; }
+.attach-ocr-text.gallery-ocr-text { max-height: 260px; font-size: 12px; }
+.attach-ocr > summary.attach-vision-model { cursor: pointer; list-style-position: inside; }
+.attach-ocr-text {
+  margin: 4px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px;
+}
 .attach-image-name {
   font-size: 10px;
   opacity: 0.5;

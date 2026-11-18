@@ -1836,6 +1836,8 @@ async def _caption_multimodal_image_attachments(
     from src.constants import UPLOAD_DIR
     from src.document_processor import describe_image_for_caption
     from src.chat_handler import _sync_upload_vision_to_gallery
+    from src.caption_source import VISION, vision_source, write_cache_kind
+    from src.vision_ocr import has_text_block, model_label
 
     for ref in attachment_meta:
         att_id = ref.get("id")
@@ -1870,9 +1872,12 @@ async def _caption_multimodal_image_attachments(
             # put_vision_text() the moment a human actually reviews/edits it.
             with open(cache_path + ".autogen", "w", encoding="utf-8") as f:
                 f.write("1")
+            source = vision_source(model_label(model, "ocr" if has_text_block(text) else ""))
+            write_cache_kind(cache_path, VISION)
         except Exception as e:
+            source = vision_source(model)
             logger.warning("[multimodal-caption] cache write failed for %s: %s", att_id, e)
-        _sync_upload_vision_to_gallery({"hash": ref.get("checksum_sha256")}, owner, text)
+        _sync_upload_vision_to_gallery({"hash": ref.get("checksum_sha256")}, owner, text, source)
 
 
 def run_post_response_tasks(

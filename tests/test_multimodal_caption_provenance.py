@@ -152,7 +152,7 @@ def test_describe_image_for_caption_extensionless_uses_resolved_mime(tmp_path, m
 
     captured = {}
 
-    async def _fake_llm_call_async(url, model, messages, headers=None, timeout=None):
+    async def _fake_llm_call_async(url, model, messages, headers=None, timeout=None, **kwargs):
         captured["messages"] = messages
         return "ok"
 

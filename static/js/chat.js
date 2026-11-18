@@ -9,7 +9,7 @@ import { effectiveTemperature, temperatureHint } from './sessionTemperature.js';
 import Storage from './storage.js';
 import uiModule from './ui.js?v=20260916largetoolscroll1';
 import sessionModule from './sessions.js';
-import chatRenderer, { renderToolIcon } from './chatRenderer.js?v=20260914metricssummary1';
+import chatRenderer, { renderToolIcon, attachOcrBlock, setPendingImageText, appendPendingImageText } from './chatRenderer.js?v=20261118ocrdisplay1';
 import chatStream from './chatStream.js?v=20261026devsync1';
 import { addAITTSButton } from './tts-ai.js';
 import markdownModule from './markdown.js';
@@ -4864,6 +4864,7 @@ import { invalidateSettings } from './appConfig.js';
                 if (_ub) {
                   const _aw = _ub.querySelector('.attach-cards');
                   if (_aw) {
+                    setPendingImageText(json.data, _ub);
                     for (const _att of json.data) {
                       const _isImg = (_att.mime || '').startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|svg|bmp)$/i.test(_att.name || '');
                       if (_isImg && _att.id) {
@@ -4881,6 +4882,14 @@ import { invalidateSettings } from './appConfig.js';
                             const _name = _existingPreview.querySelector('.attach-image-name');
                             if (_name) _existingPreview.insertBefore(_vl, _name);
                             else _existingPreview.appendChild(_vl);
+                          }
+                          if (!_existingPreview.querySelector('.attach-ocr')) {
+                            const _ob = attachOcrBlock(_att, { plain: true });
+                            if (_ob) {
+                              const _name = _existingPreview.querySelector('.attach-image-name');
+                              if (_name) _existingPreview.insertBefore(_ob, _name);
+                              else _existingPreview.appendChild(_ob);
+                            }
                           }
                           continue;
                         }
@@ -4901,6 +4910,7 @@ import { invalidateSettings } from './appConfig.js';
                           _vl.textContent = 'Vision: ' + String(_att.vision_model).split('/').pop();
                           _iw.appendChild(_vl);
                         }
+                        { const _ob = attachOcrBlock(_att, { plain: true }); if (_ob) _iw.appendChild(_ob); }
                         if (_att.name) {
                           const _nm = document.createElement('div');
                           _nm.className = 'attach-image-name';
@@ -5021,6 +5031,7 @@ import { invalidateSettings } from './appConfig.js';
                 if (_isBg) continue;
                 if (json.id) _savedAssistantMessageId = String(json.id);
                 if (holder && json.id) holder.dataset.dbId = json.id;
+                if (holder) appendPendingImageText(holder);
 
               } else if (json.type === 'tool_start') {
                 _editorProgress = null;

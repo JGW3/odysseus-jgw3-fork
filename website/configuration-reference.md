@@ -150,7 +150,7 @@ The source tree reads **152** `ODYSSEUS_*` variables: 95 an operator may want to
 | `ODYSSEUS_MEDIA_PROBE_TIMEOUT` | `15` | `src/media_ingress.py` | Seconds allowed for probing a video's metadata before giving up. |
 | `ODYSSEUS_MEMORY_IMPORT_MAX_BYTES` | `10 * 1024 * 1024` | `src/upload_limits.py` (+1 more) | Maximum bytes accepted for a memory import file. |
 | `ODYSSEUS_OCR_FIRST` | `'1'` | `src/vision_ocr.py` | Run local OCR on every image before the vision model describes it; set 0 to use the vision model alone. |
-| `ODYSSEUS_OCR_FIRST_TIMEOUT` | `'8'` | `src/vision_ocr.py` | Seconds local OCR may take on an image before the description goes ahead without it. |
+| `ODYSSEUS_OCR_FIRST_TIMEOUT` | `'20'` | `src/vision_ocr.py` | Seconds local OCR may take on an image (default 20) before the description goes ahead without it. |
 | `ODYSSEUS_OCR_MAX_SIDE` | `str(_MAX_SIDE_DEFAULT)` | `src/agent_tools/ocr_engine.py` | Longest image side in pixels before local OCR downscales it; 0 or less turns downscaling off. |
 | `ODYSSEUS_PERSONAL_UPLOAD_MAX_BYTES` | `25 * 1024 * 1024` | `src/upload_limits.py` (+1 more) | Maximum bytes accepted for a personal-documents upload. |
 | `ODYSSEUS_STT_MAX_AUDIO_BYTES` | `25 * 1024 * 1024` | `src/upload_limits.py` | Maximum bytes accepted for an audio file submitted for transcription. |

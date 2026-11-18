@@ -501,7 +501,7 @@ export function buildAttachCards(attachments) {
       if (att.id) {
         imgWrap.addEventListener('click', (e) => {
           // Tapping the corner OCR button shouldn't also open the lightbox.
-          if (e.target.closest('.attach-ocr-btn')) return;
+          if (e.target.closest('.attach-ocr-btn') || e.target.closest('.attach-ocr')) return;
           _openImageLightbox(att);
         });
       }
@@ -581,6 +581,8 @@ export function buildAttachCards(attachments) {
         visionLabel.textContent = 'Vision: ' + String(att.vision_model).split('/').pop();
         imgWrap.appendChild(visionLabel);
       }
+      const ocrBlock = attachOcrBlock(att);
+      if (ocrBlock) imgWrap.appendChild(ocrBlock);
       if (att.name) {
         const label = document.createElement('div');
         label.className = 'attach-image-name';
@@ -1912,7 +1914,7 @@ function _activateEntityAnchor(e, forcedAnchor = null) {
       if (open) open(id);
     }).catch(() => {});
   } else if (kind === 'image') {
-    import('./gallery.js?v=20261105captionsource1').then(mod => {
+    import('./gallery.js?v=20261118ocrdisplay1').then(mod => {
       const open = mod.openGalleryImage || (mod.default && mod.default.openGalleryImage);
       if (open) open(id);
     }).catch(() => {});
@@ -2133,7 +2135,7 @@ export function buildImageBubble(imageUrl, prompt, model, size, quality, imageId
     e.stopPropagation();
     try {
       const [galleryMod, editorMod] = await Promise.all([
-        import('./gallery.js?v=20261105captionsource1'),
+        import('./gallery.js?v=20261118ocrdisplay1'),
         loadPanel('editor'),
       ]);
       // Ensure the Gallery modal is open so the editor has a container
@@ -2167,7 +2169,7 @@ export function buildImageBubble(imageUrl, prompt, model, size, quality, imageId
     galleryBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       try {
-        const mod = await import('./gallery.js?v=20261105captionsource1');
+        const mod = await import('./gallery.js?v=20261118ocrdisplay1');
         const open = mod.openGalleryImage || (mod.default && mod.default.openGalleryImage);
         if (open) open(imageId);
       } catch (err) {
@@ -3470,6 +3472,7 @@ export function addMessage(role, content, modelName, metadata) {
         // refresh.  Avoid stealing focus while the history is loading.
         renderAskUserCard(pendingAskUser, { focus: false, scroll: false });
       }
+      appendPendingImageText(lastWrap);
       return lastWrap;
     }
 
@@ -3581,6 +3584,12 @@ export function addMessage(role, content, modelName, metadata) {
         /\n*\[Image: ([^\]]+)\]\n([\s\S]*?)(?=\n*\[Image: |\n*\[Image attached: |\n*=== File: |\n*\[PDF content\]:|$)/g,
         (_m, name, desc) => { const d = desc.trim(); if (d) _visionBlocks.push({ name: name, desc: d }); return ''; }
       );
+      // OCR text given to the model is shown under the image's "OCR" label,
+      // not in the bubble.
+      text = text.replace(
+        /\n*\[Text read from this image by OCR[^\]\n]*\]:\n[\s\S]*?(?=\n*\[Image: |\n*\[Image attached: |\n*\[Attachment: |\n*\[\d+ inline media payloads? omitted\]|\n*=== File: |\n*\[PDF content\]:|$)/g,
+        ''
+      );
     }
     // With attachments present, also strip the embedded file/PDF/image-marker text.
     if (role === 'user' && attachments?.length) {
@@ -3679,6 +3688,10 @@ export function addMessage(role, content, modelName, metadata) {
 
     wrap.appendChild(r);
     wrap.appendChild(b);
+
+    // OCR text from the user's images goes, collapsed, at the end of the reply.
+    if (role === 'user') setPendingImageText(attachments, wrap);
+    else if (role === 'assistant') appendPendingImageText(wrap);
 
     // Add stopped indicator + continue button for messages that were stopped by user
     if (role === 'assistant' && metadata?.stopped) {
@@ -3876,5 +3889,132 @@ const chatRenderer = {
   buildAttachCards,
   updateMessageAttachments,
 };
+
+// What local OCR read from an attached image, collapsed under its label so
+// the user can check the exact text the model was given. With { plain: true }
+// (a live turn, whose reply is about to show the text) just the label.
+export function attachOcrBlock(att, { plain = false } = {}) {
+  const text = String((att && att.ocr) || '').trim();
+  if (!text) return null;
+  if (plain) {
+    const label = document.createElement('div');
+    label.className = 'attach-vision-model attach-ocr';
+    label.textContent = 'OCR: RapidOCR';
+    return label;
+  }
+  const lines = text.split('\n').length;
+  const box = document.createElement('details');
+  box.className = 'attach-ocr';
+  const label = document.createElement('summary');
+  label.className = 'attach-vision-model';
+  label.textContent = `OCR: RapidOCR · ${lines} line${lines === 1 ? '' : 's'}`;
+  const body = document.createElement('pre');
+  body.className = 'attach-ocr-text';
+  body.textContent = text;
+  box.append(label, body);
+  return box;
+}
+
+// The text local OCR read from the turn's images, shown collapsed at the top
+// of the reply, under the thinking block and in the same format.
+let _pendingImageText = [];
+let _pendingImageTextOwner = null;
+export function setPendingImageText(attachments, userMsgEl = null) {
+  _pendingImageTextOwner = userMsgEl || null;
+  _pendingImageText = (attachments || [])
+    .filter((a) => a && String(a.ocr || '').trim())
+    .map((a) => {
+      const seconds = Number(a.ocr_seconds);
+      return {
+        name: String(a.name || 'image'),
+        text: String(a.ocr).trim(),
+        seconds: Number.isFinite(seconds) && seconds >= 0 ? seconds : null,
+      };
+    });
+}
+let _imageTextSeq = 0;
+export function imageTextSection(items) {
+  if (!items || !items.length) return null;
+  const id = `image-text-${Date.now()}-${++_imageTextSeq}`;
+  const label = 'text from image' + (items.length > 1 ? 's' : '');
+  const box = document.createElement('div');
+  box.className = 'thinking-section image-text-section';
+  const header = document.createElement('div');
+  header.className = 'thinking-header';
+  header.dataset.thinkingId = id;
+  const left = document.createElement('div');
+  left.className = 'thinking-header-left';
+  const title = document.createElement('span');
+  title.dataset.label = label;
+  title.textContent = 'View ' + label;
+  left.appendChild(title);
+  const right = document.createElement('div');
+  right.className = 'image-text-meta';
+  // "1.3s · 4 lines", like the thinking block's time then tokens; no time
+  // for images OCR'd before it was recorded.
+  const lines = items.reduce((sum, item) => sum + item.text.split('\n').length, 0);
+  const timed = items.filter((item) => item.seconds !== null);
+  const facts = [];
+  if (timed.length) facts.push(timed.reduce((sum, item) => sum + item.seconds, 0).toFixed(1) + 's');
+  facts.push(`${lines} line${lines === 1 ? '' : 's'}`);
+  const time = document.createElement('span');
+  time.className = 'image-text-time';
+  time.textContent = facts.join(' \u00b7 ');
+  right.appendChild(time);
+  const toggle = document.createElement('span');
+  toggle.className = 'thinking-toggle';
+  toggle.id = id + '-toggle';
+  right.appendChild(toggle);
+  header.append(left, right);
+  const content = document.createElement('div');
+  content.className = 'thinking-content';
+  content.id = id;
+  const inner = document.createElement('div');
+  inner.className = 'thinking-content-inner';
+  for (const item of items) {
+    if (items.length > 1) {
+      const name = document.createElement('div');
+      name.className = 'image-text-name';
+      name.textContent = item.name;
+      inner.appendChild(name);
+    }
+    // A div, not a <pre>: it takes the thinking block's font, size and colour.
+    const body = document.createElement('div');
+    body.className = 'image-text-body';
+    body.textContent = item.text;
+    inner.appendChild(body);
+  }
+  content.appendChild(inner);
+  box.append(header, content);
+  return box;
+}
+// Once the reply shows the text (with its time and line count), the
+// expander under the photo would only repeat it: keep a plain
+// "OCR: RapidOCR" label there.
+function _flattenAttachOcr(userMsgEl) {
+  if (!userMsgEl) return;
+  for (const box of userMsgEl.querySelectorAll('details.attach-ocr')) {
+    const label = document.createElement('div');
+    label.className = 'attach-vision-model attach-ocr';
+    label.textContent = 'OCR: RapidOCR';
+    box.replaceWith(label);
+  }
+}
+export function appendPendingImageText(msgEl) {
+  if (!msgEl || !_pendingImageText.length) return;
+  const target = msgEl.querySelector(':scope > .content') || msgEl.querySelector(':scope > .body') || msgEl;
+  if (!target.querySelector('.image-text-section')) {
+    const section = imageTextSection(_pendingImageText);
+    if (section) {
+      // Right under the reply's first thinking block, or first in the reply.
+      const thinking = target.querySelector('.thinking-section');
+      if (thinking) thinking.after(section);
+      else target.prepend(section);
+    }
+  }
+  if (target.querySelector('.image-text-section')) _flattenAttachOcr(_pendingImageTextOwner);
+  _pendingImageText = [];
+  _pendingImageTextOwner = null;
+}
 
 export default chatRenderer;
