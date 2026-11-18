@@ -89,7 +89,80 @@ def _join_line(parts: list[str]) -> str:
     out = re.sub(r"\s+([,.;:!?%)\]])", r"\1", out)
     return out.strip()
 
+def _column_split(entries: list[dict]) -> float | None:
+    """x of the empty gutter between two text columns, or None for one column.
+
+    The gutter is the widest x-band in the middle of the page that (almost)
+    no text box crosses, with real text on both sides.
+    """
+    if len(entries) < 8:
+        return None
+    left = min(e["min_x"] for e in entries)
+    right = max(e["max_x"] for e in entries)
+    width = right - left
+    if width <= 0:
+        return None
+    bins = 200
+    cover = [0] * bins
+    for e in entries:
+        a = int((e["min_x"] - left) / width * (bins - 1))
+        b = int((e["max_x"] - left) / width * (bins - 1))
+        for i in range(max(a, 0), min(b, bins - 1) + 1):
+            cover[i] += 1
+    allowed = max(1, len(entries) // 40)       # a few boxes may straddle it
+    best = None
+    i = int(bins * 0.2)
+    while i < int(bins * 0.8):
+        if cover[i] <= allowed:
+            j = i
+            while j < bins and cover[j] <= allowed:
+                j += 1
+            if j - i >= 2 and (best is None or j - i > best[1] - best[0]):
+                best = (i, j)
+            i = j
+        else:
+            i += 1
+    if best is None:
+        return None
+    split = left + (best[0] + best[1]) / 2 / (bins - 1) * width
+    left_side = [e["max_x"] - e["min_x"] for e in entries if e["max_x"] <= split]
+    right_side = [e["max_x"] - e["min_x"] for e in entries if e["min_x"] >= split]
+    if min(len(left_side), len(right_side)) < max(3, len(entries) // 6):
+        return None
+    # Text columns are wide on both sides; a receipt's prices or a table's
+    # numbers form a narrow strip that must stay on its row.
+    median = lambda widths: sorted(widths)[len(widths) // 2]
+    if min(median(left_side), median(right_side)) < 0.25 * width:
+        return None
+    return split
+
+
 def _reading_text(entries: list[dict]) -> str:
+    """Reading-order text: columns left to right, each top to bottom.
+
+    Boxes that cross the gutter (a page header, a full-width line) divide the
+    page into bands, so text above and below them keeps its place.
+    """
+    split = _column_split(entries)
+    if split is None:
+        return _rows_text(entries)
+    spanning = sorted((e for e in entries if e["min_x"] < split < e["max_x"]), key=lambda e: e["cy"])
+    columns = [e for e in entries if not (e["min_x"] < split < e["max_x"])]
+    out, top = [], float("-inf")
+    for divider in spanning + [None]:
+        bottom = divider["cy"] if divider else float("inf")
+        band = [e for e in columns if top <= e["cy"] < bottom]
+        for side in ([e for e in band if e["cx"] < split], [e for e in band if e["cx"] >= split]):
+            text = _rows_text(side)
+            if text:
+                out.append(text)
+        if divider:
+            out.append(_rows_text([divider]))
+            top = bottom
+    return "\n".join(part for part in out if part)
+
+
+def _rows_text(entries: list[dict]) -> str:
     rows: list[dict] = []
     for entry in sorted(entries, key=lambda item: (item["cy"], item["min_x"])):
         for row in rows:
@@ -140,7 +213,7 @@ def extract_image_text(path: Path, *, include_layout: bool = False, numeric_only
             line["box"] = points
         lines.append(line)
         entries.append({"t": text, "p": score, "min_x": metrics[0], "max_x": metrics[1],
-                        "min_y": metrics[2], "max_y": metrics[3], "cy": metrics[5], "h": metrics[6]})
+                        "min_y": metrics[2], "max_y": metrics[3], "cx": metrics[4], "cy": metrics[5], "h": metrics[6]})
     text = _reading_text(entries)
     return {"legend": {"t": "text", "p": "confidence", "xy": "pixel center"}, "count": accepted,
             "returned": len(lines), "truncated": accepted > len(lines), "lines": lines, "text": text}

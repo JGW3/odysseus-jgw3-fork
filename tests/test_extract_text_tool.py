@@ -136,3 +136,26 @@ def test_inspect_media_auto_augments_exact_text_queries_only(monkeypatch, tmp_pa
         _active_workspace.reset(token)
     assert exact["ocr_augmented"] is True and '"t":"42"' in exact["output"]
     assert "ocr_augmented" not in general
+
+
+def _box(text, x0, x1, y):
+    return {"t": text, "p": 0.99, "min_x": x0, "max_x": x1, "min_y": y - 6, "max_y": y + 6,
+            "cx": (x0 + x1) / 2, "cy": y, "h": 12}
+
+
+def test_two_column_page_reads_each_column_top_to_bottom():
+    from src.agent_tools.ocr_engine import _reading_text
+    header = [_box("Chapter 3 - Field Notes", 60, 540, 10)]
+    left = [_box(f"left line {i}", 40, 280, 40 + 20 * i) for i in range(6)]
+    right = [_box(f"right line {i}", 320, 560, 40 + 20 * i) for i in range(6)]
+    text = _reading_text(header + left + right).splitlines()
+    assert text == (["Chapter 3 - Field Notes"] + [f"left line {i}" for i in range(6)]
+                    + [f"right line {i}" for i in range(6)])
+
+
+def test_receipt_prices_stay_on_their_item_row():
+    from src.agent_tools.ocr_engine import _reading_text
+    rows = []
+    for i in range(12):
+        rows += [_box(f"Item number {i}", 30, 200, 20 + 20 * i), _box(f"{i}.25", 420, 470, 21 + 20 * i)]
+    assert _reading_text(rows).splitlines() == [f"Item number {i} {i}.25" for i in range(12)]
